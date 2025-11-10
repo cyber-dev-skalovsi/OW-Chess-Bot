@@ -1,6 +1,0 @@
-﻿<Window x:Class="ChessBot.MainWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Chess Game" Height="600" Width="600">
-    <UniformGrid x:Name="ChessBoard" Rows="8" Columns="8" Background="BurlyWood"/>
-</Window>
