@@ -13,7 +13,6 @@
 			<PrivateAssets>all</PrivateAssets>
 			<IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
 		</PackageReference>
-		<ProjectReference Include="..\Boychesser.Uci\Boychesser.Uci.csproj" />
 		<ProjectReference Include="..\Chess-Challenge\Chess-Challenge.csproj" />
 	</ItemGroup>
 </Project>
