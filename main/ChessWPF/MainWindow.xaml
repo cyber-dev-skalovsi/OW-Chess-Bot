@@ -1,0 +1,26 @@
+﻿<Window x:Class="SystemHelper.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="svchost"
+        Height="600"
+        Width="600"
+        MinHeight="200"
+        MinWidth="200"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        ResizeMode="CanResize"
+        Background="Transparent"
+        Topmost="True">
+    <!-- Semi-transparent dark border with rounded corners -->
+    <Border Background="#F0282828"
+            CornerRadius="10"
+            Padding="10">
+        <!-- Viewbox maintains aspect ratio and adds black bars -->
+        <Viewbox Stretch="Uniform">
+            <Grid x:Name="ChessBoard"
+                  Width="580"
+                  Height="580"
+                  Background="#312E2B"/>
+        </Viewbox>
+    </Border>
+</Window>
