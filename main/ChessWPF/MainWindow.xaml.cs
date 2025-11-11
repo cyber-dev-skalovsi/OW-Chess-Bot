@@ -24,11 +24,14 @@ namespace SystemHelper
         private string currentFen = FenUtility.StartPositionFEN;
         private string currentBestMove = "";
         private string lastPgn = "";
+        private bool isLocked = false;
         private Dictionary<string, string> pieceUnicode = new Dictionary<string, string>
         {
             {"wK", "♔"}, {"wQ", "♕"}, {"wR", "♖"}, {"wB", "♗"}, {"wN", "♘"}, {"wP", "♙"},
             {"bK", "♚"}, {"bQ", "♛"}, {"bR", "♜"}, {"bB", "♝"}, {"bN", "♞"}, {"bP", "♟"}
         };
+        // Screen bounds for clamping window position
+        private double screenLeft, screenTop, screenRight, screenBottom;
         // For global hotkeys
         [DllImport("user32.dll")]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -43,17 +46,19 @@ namespace SystemHelper
         private const int HOTKEY_UP = 9002;
         private const int HOTKEY_RIGHT = 9003;
         private const int HOTKEY_DOWN = 9004;
+        private const int HOTKEY_FLIP = 9005;
+        private const int HOTKEY_LOCK = 9006;
         private const uint MOD_CONTROL = 0x0002;
         private const uint VK_Q = 0x51;
         private const uint VK_LEFT = 0x25;
         private const uint VK_UP = 0x26;
         private const uint VK_RIGHT = 0x27;
         private const uint VK_DOWN = 0x28;
+        private const uint VK_Y = 0x59;
+        private const uint VK_V = 0x56;
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_LAYERED = 0x80000;
         private const int WS_EX_TRANSPARENT = 0x20;
-        private const int HOTKEY_FLIP = 9005;
-        private const uint VK_Y = 0x59;
         private IntPtr _hwnd;
         private bool _isClickThrough = true; // Start with click-through enabled
         private bool _isSemiTransparent = true; // Start semi-transparent
@@ -64,10 +69,16 @@ namespace SystemHelper
             // Stealth: Hide window title to avoid showing "Chess Analysis" or any descriptive text
             this.Title = "";
             ShowInTaskbar = false;
+            // Set screen bounds
+            screenLeft = SystemParameters.WorkArea.Left;
+            screenTop = SystemParameters.WorkArea.Top;
+            screenRight = SystemParameters.WorkArea.Right;
+            screenBottom = SystemParameters.WorkArea.Bottom;
             Width = 200;
             Height = 200;
             Top = 45;
-            Left = SystemParameters.WorkArea.Right - Width + 8;
+            Left = screenRight - Width + 8;
+            ClampPosition();
             Topmost = true;
             Opacity = 0.5;
             // Make window draggable (only when not click-through)
@@ -83,24 +94,19 @@ namespace SystemHelper
             {
                 _hwnd = new WindowInteropHelper(this).Handle;
                 RegisterHotKey(_hwnd, HOTKEY_ID, MOD_CONTROL, VK_Q);
-                // Register global arrow keys (no modifier)
-                RegisterHotKey(_hwnd, HOTKEY_LEFT, 0, VK_LEFT);
-                RegisterHotKey(_hwnd, HOTKEY_UP, 0, VK_UP);
-                RegisterHotKey(_hwnd, HOTKEY_RIGHT, 0, VK_RIGHT);
-                RegisterHotKey(_hwnd, HOTKEY_DOWN, 0, VK_DOWN);
-                RegisterHotKey(_hwnd, HOTKEY_FLIP, MOD_CONTROL, VK_Y); // ADD THIS LINE
+                RegisterHotKey(_hwnd, HOTKEY_FLIP, MOD_CONTROL, VK_Y);
+                RegisterHotKey(_hwnd, HOTKEY_LOCK, MOD_CONTROL, VK_V);
+                RegisterArrowHotkeys();
                 HwndSource.FromHwnd(_hwnd).AddHook(HwndHook);
                 // Enable click-through by default
                 EnableClickThrough();
             };
             Closing += (s, e) =>
             {
+                UnregisterArrowHotkeys();
                 UnregisterHotKey(_hwnd, HOTKEY_ID);
-                UnregisterHotKey(_hwnd, HOTKEY_LEFT);
-                UnregisterHotKey(_hwnd, HOTKEY_UP);
-                UnregisterHotKey(_hwnd, HOTKEY_RIGHT);
-                UnregisterHotKey(_hwnd, HOTKEY_DOWN);
-                UnregisterHotKey(_hwnd, HOTKEY_FLIP); // ADD THIS LINE
+                UnregisterHotKey(_hwnd, HOTKEY_FLIP);
+                UnregisterHotKey(_hwnd, HOTKEY_LOCK);
             };
             Debug.WriteLine("========================================");
             Debug.WriteLine("🤖 Chess Analysis GUI Starting");
@@ -111,6 +117,27 @@ namespace SystemHelper
             InitializeChessBoard();
             UpdateChessBoard(currentFen); // Show initial board state
             Task.Run(RunListener);
+        }
+        private void RegisterArrowHotkeys()
+        {
+            RegisterHotKey(_hwnd, HOTKEY_LEFT, 0, VK_LEFT);
+            RegisterHotKey(_hwnd, HOTKEY_UP, 0, VK_UP);
+            RegisterHotKey(_hwnd, HOTKEY_RIGHT, 0, VK_RIGHT);
+            RegisterHotKey(_hwnd, HOTKEY_DOWN, 0, VK_DOWN);
+            Debug.WriteLine("Arrow hotkeys registered");
+        }
+        private void UnregisterArrowHotkeys()
+        {
+            UnregisterHotKey(_hwnd, HOTKEY_LEFT);
+            UnregisterHotKey(_hwnd, HOTKEY_UP);
+            UnregisterHotKey(_hwnd, HOTKEY_RIGHT);
+            UnregisterHotKey(_hwnd, HOTKEY_DOWN);
+            Debug.WriteLine("Arrow hotkeys unregistered");
+        }
+        private void ClampPosition()
+        {
+            Left = Math.Max(screenLeft, Math.Min(Left, screenRight - Width));
+            Top = Math.Max(screenTop, Math.Min(Top, screenBottom - Height));
         }
         // Global hotkey hook
         private IntPtr HwndHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -125,26 +152,60 @@ namespace SystemHelper
                         ToggleVisibility();
                         break;
                     case HOTKEY_LEFT:
-                        Left -= MOVE_STEP;
+                        if (!isLocked)
+                        {
+                            Left -= MOVE_STEP;
+                            ClampPosition();
+                        }
                         break;
                     case HOTKEY_UP:
-                        Top -= MOVE_STEP;
+                        if (!isLocked)
+                        {
+                            Top -= MOVE_STEP;
+                            ClampPosition();
+                        }
                         break;
                     case HOTKEY_RIGHT:
-                        Left += MOVE_STEP;
+                        if (!isLocked)
+                        {
+                            Left += MOVE_STEP;
+                            ClampPosition();
+                        }
                         break;
                     case HOTKEY_DOWN:
-                        Top += MOVE_STEP;
+                        if (!isLocked)
+                        {
+                            Top += MOVE_STEP;
+                            ClampPosition();
+                        }
                         break;
-                    case HOTKEY_FLIP: // ADD THIS CASE
+                    case HOTKEY_FLIP:
                         FlipBoard();
+                        break;
+                    case HOTKEY_LOCK:
+                        ToggleLock();
                         break;
                 }
                 handled = true;
             }
             return IntPtr.Zero;
         }
-
+        private void ToggleLock()
+        {
+            isLocked = !isLocked;
+            if (isLocked)
+            {
+                UnregisterArrowHotkeys();
+                DisableClickThrough();
+                Debug.WriteLine("🔒 Locked: Position fixed, input enabled (Ctrl+V)");
+            }
+            else
+            {
+                RegisterArrowHotkeys();
+                EnableClickThrough();
+                Debug.WriteLine("🔓 Unlocked: Position movable, click-through enabled (Ctrl+V)");
+            }
+        }
         private void FlipBoard()
         {
             Dispatcher.Invoke(() =>
