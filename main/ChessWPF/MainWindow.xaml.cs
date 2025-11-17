@@ -25,11 +25,6 @@ namespace SystemHelper
         private string currentBestMove = "";
         private string lastPgn = "";
         private bool isLocked = false;
-        private bool isCompactMode = false;
-        private bool isPinLocked = false;
-        private int pinAttempts = 0;
-        private const string PIN_FILE = "lock.dat";
-        private const int MAX_PIN_ATTEMPTS = 3;
 
         private Dictionary<string, string> pieceUnicode = new Dictionary<string, string>
         {
@@ -59,9 +54,7 @@ namespace SystemHelper
         private const int HOTKEY_FLIP = 9005;
         private const int HOTKEY_LOCK_POS = 9006;
         private const int HOTKEY_DESTRUCT = 9007;
-        private const int HOTKEY_PIN_LOCK = 9008;
-        private const int HOTKEY_OPTIONS = 9009;
-        private const int HOTKEY_COMPACT = 9010;
+        private const int HOTKEY_OPTIONS = 9008;
 
         // Modifiers
         private const uint MOD_CONTROL = 0x0002;
@@ -73,9 +66,7 @@ namespace SystemHelper
         private const uint VK_F = 0x46;
         private const uint VK_L = 0x4C;
         private const uint VK_X = 0x58;
-        private const uint VK_P = 0x50;
         private const uint VK_O = 0x4F;
-        private const uint VK_C = 0x43;
         private const uint VK_LEFT = 0x25;
         private const uint VK_UP = 0x26;
         private const uint VK_RIGHT = 0x27;
@@ -89,9 +80,8 @@ namespace SystemHelper
         private bool _isClickThrough = true;
         private const double MOVE_STEP = 10.0;
 
-        // UI Elements for compact mode
-        private Grid compactGrid;
-        private TextBlock compactMoveText;
+        // Cache for board squares - performance optimization
+        private Border[,] squareCache = new Border[8, 8];
 
         public MainWindow()
         {
@@ -140,55 +130,13 @@ namespace SystemHelper
             Debug.WriteLine("========================================");
 
             bot = new MyBot();
-            bot.SetMaxDepth(10);
+            bot.SetMaxDepth(6);
             Debug.WriteLine("✅ Bot initialized (depth: 10)");
 
-            InitializeCompactMode();
             InitializeChessBoard();
             UpdateChessBoard(currentFen);
 
             Task.Run(RunListener);
-        }
-
-        private void InitializeCompactMode()
-        {
-            compactGrid = new Grid
-            {
-                Background = new SolidColorBrush(Color.FromRgb(20, 20, 20)),
-                Visibility = Visibility.Collapsed
-            };
-
-            compactMoveText = new TextBlock
-            {
-                Text = "",
-                FontSize = 16,
-                FontWeight = FontWeights.Bold,
-                Foreground = Brushes.White,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                TextAlignment = TextAlignment.Center
-            };
-
-            compactGrid.Children.Add(compactMoveText);
-
-            // FIX: Access the Border, then find the Viewbox, then the Grid inside
-            if (this.Content is Border border && border.Child is Viewbox viewbox)
-            {
-                // Create a new Grid to hold both ChessBoard and compactGrid
-                var containerGrid = new Grid();
-
-                // Move ChessBoard into the container
-                viewbox.Child = null; // Remove ChessBoard from Viewbox
-                containerGrid.Children.Add(ChessBoard);
-                containerGrid.Children.Add(compactGrid);
-
-                // Put container back in Viewbox
-                viewbox.Child = containerGrid;
-            }
-            else
-            {
-                Debug.WriteLine("❌ ERROR: Unexpected XAML structure!");
-            }
         }
 
         private void RegisterAllHotkeys()
@@ -197,9 +145,7 @@ namespace SystemHelper
             RegisterHotKey(_hwnd, HOTKEY_FLIP, MOD_CTRL_SHIFT, VK_F);
             RegisterHotKey(_hwnd, HOTKEY_LOCK_POS, MOD_CTRL_SHIFT, VK_L);
             RegisterHotKey(_hwnd, HOTKEY_DESTRUCT, MOD_CTRL_SHIFT, VK_X);
-            RegisterHotKey(_hwnd, HOTKEY_PIN_LOCK, MOD_CTRL_SHIFT, VK_P);
             RegisterHotKey(_hwnd, HOTKEY_OPTIONS, MOD_CTRL_SHIFT, VK_O);
-            RegisterHotKey(_hwnd, HOTKEY_COMPACT, MOD_CTRL_SHIFT, VK_C);
             RegisterArrowHotkeys();
             Debug.WriteLine("✅ All hotkeys registered");
         }
@@ -210,9 +156,7 @@ namespace SystemHelper
             UnregisterHotKey(_hwnd, HOTKEY_FLIP);
             UnregisterHotKey(_hwnd, HOTKEY_LOCK_POS);
             UnregisterHotKey(_hwnd, HOTKEY_DESTRUCT);
-            UnregisterHotKey(_hwnd, HOTKEY_PIN_LOCK);
             UnregisterHotKey(_hwnd, HOTKEY_OPTIONS);
-            UnregisterHotKey(_hwnd, HOTKEY_COMPACT);
             UnregisterArrowHotkeys();
         }
 
@@ -286,14 +230,8 @@ namespace SystemHelper
                     case HOTKEY_DESTRUCT:
                         SelfDestruct();
                         break;
-                    case HOTKEY_PIN_LOCK:
-                        TogglePinLock();
-                        break;
                     case HOTKEY_OPTIONS:
                         ShowOptionsMenu();
-                        break;
-                    case HOTKEY_COMPACT:
-                        ToggleCompactMode();
                         break;
                 }
                 handled = true;
@@ -301,247 +239,14 @@ namespace SystemHelper
             return IntPtr.Zero;
         }
 
-        private void ToggleCompactMode()
-        {
-            isCompactMode = !isCompactMode;
-
-            if (isCompactMode)
-            {
-                ChessBoard.Visibility = Visibility.Collapsed;
-                compactGrid.Visibility = Visibility.Visible;
-
-                // Store current size before switching
-                savedSize = Width;
-
-                // Set compact size
-                Width = 80;
-                Height = 50;
-
-                UpdateCompactDisplay();
-                Debug.WriteLine("📦 Compact mode enabled (Ctrl+Shift+C)");
-            }
-            else
-            {
-                compactGrid.Visibility = Visibility.Collapsed;
-                ChessBoard.Visibility = Visibility.Visible;
-
-                // Restore saved size
-                Width = savedSize;
-                Height = savedSize;
-
-                Debug.WriteLine("📋 Board mode enabled (Ctrl+Shift+C)");
-            }
-            ClampPosition();
-        }
-
-        private void UpdateCompactDisplay()
-        {
-            if (!string.IsNullOrEmpty(currentBestMove) && currentBestMove.Length >= 4)
-            {
-                // Convert UCI to readable format (e.g., "e2e4" to "e4")
-                string move = currentBestMove.Substring(2, 2);
-                if (currentBestMove.Length > 4)
-                {
-                    move += currentBestMove.Substring(4); // Add promotion piece
-                }
-                compactMoveText.Text = move;
-            }
-            else
-            {
-                compactMoveText.Text = "...";
-            }
-        }
-
-        private void TogglePinLock()
-        {
-            if (isPinLocked)
-            {
-                // Already locked, do nothing - unlock will happen via ToggleVisibility
-                Debug.WriteLine("⚠️ Already PIN locked - use Ctrl+Shift+H to unlock");
-            }
-            else
-            {
-                // Lock - set PIN if needed, then hide
-                if (!File.Exists(PIN_FILE))
-                {
-                    ShowPinDialog(true);
-                }
-                else
-                {
-                    isPinLocked = true;
-                    DisableAllHotkeysExceptPin();
-                    Visibility = Visibility.Hidden;
-                    Debug.WriteLine("🔒 PIN locked and hidden");
-                }
-            }
-        }
-
-        private void ShowPinDialog(bool isSettingPin)
-        {
-            var pinWindow = new Window
-            {
-                Width = 320,
-                Height = 200,
-                Title = "",
-                WindowStartupLocation = WindowStartupLocation.CenterScreen,
-                Topmost = true,
-                ResizeMode = ResizeMode.NoResize,
-                WindowStyle = WindowStyle.None,
-                AllowsTransparency = true,
-                Background = Brushes.Transparent
-            };
-
-            var border = new Border
-            {
-                Background = new SolidColorBrush(Color.FromArgb(240, 30, 30, 30)),
-                CornerRadius = new CornerRadius(12),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(100, 100, 100, 100)),
-                BorderThickness = new Thickness(1)
-            };
-
-            var stack = new StackPanel { Margin = new Thickness(30) };
-
-            var title = new TextBlock
-            {
-                Text = isSettingPin ? "🔐 Set PIN" : "🔓 Enter PIN",
-                FontSize = 20,
-                FontWeight = FontWeights.Bold,
-                Foreground = Brushes.White,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 20)
-            };
-
-            var label = new TextBlock
-            {
-                Text = isSettingPin ? "Enter 4-digit PIN:" : $"Attempts remaining: {MAX_PIN_ATTEMPTS - pinAttempts}",
-                Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 10)
-            };
-
-            var passwordBox = new PasswordBox
-            {
-                MaxLength = 4,
-                FontSize = 18,
-                Padding = new Thickness(10),
-                Background = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
-                Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
-                BorderThickness = new Thickness(1)
-            };
-
-            var button = new Button
-            {
-                Content = "OK",
-                Margin = new Thickness(0, 20, 0, 0),
-                Padding = new Thickness(40, 10, 40, 10),
-                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
-                Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(100, 100, 100)),
-                BorderThickness = new Thickness(1),
-                FontWeight = FontWeights.Bold,
-                Cursor = Cursors.Hand
-            };
-
-            button.MouseEnter += (s, e) => button.Background = new SolidColorBrush(Color.FromRgb(80, 80, 80));
-            button.MouseLeave += (s, e) => button.Background = new SolidColorBrush(Color.FromRgb(60, 60, 60));
-
-            button.Click += (s, e) =>
-            {
-                var pin = passwordBox.Password;
-                if (pin.Length != 4 || !int.TryParse(pin, out _))
-                {
-                    label.Text = "❌ PIN must be 4 digits";
-                    label.Foreground = new SolidColorBrush(Color.FromRgb(255, 100, 100));
-                    passwordBox.Clear();
-                    return;
-                }
-
-                if (isSettingPin)
-                {
-                    File.WriteAllText(PIN_FILE, pin);
-                    isPinLocked = true;
-                    DisableAllHotkeysExceptPin();
-                    Visibility = Visibility.Hidden;
-                    pinWindow.Close();
-                    Debug.WriteLine("🔒 PIN set, locked and hidden");
-                }
-                else
-                {
-                    var storedPin = File.ReadAllText(PIN_FILE);
-                    if (pin == storedPin)
-                    {
-                        isPinLocked = false;
-                        pinAttempts = 0;
-                        RegisterAllHotkeys();
-                        Visibility = Visibility.Visible;
-                        Activate();
-                        pinWindow.Close();
-                        Debug.WriteLine("🔓 PIN unlocked and shown");
-                    }
-                    else
-                    {
-                        pinAttempts++;
-                        if (pinAttempts >= MAX_PIN_ATTEMPTS)
-                        {
-                            pinWindow.Close();
-                            SelfDestruct();
-                        }
-                        else
-                        {
-                            label.Text = $"❌ Wrong PIN! Attempts: {MAX_PIN_ATTEMPTS - pinAttempts}";
-                            label.Foreground = new SolidColorBrush(Color.FromRgb(255, 100, 100));
-                            passwordBox.Clear();
-                        }
-                    }
-                }
-            };
-
-            passwordBox.KeyDown += (s, e) =>
-            {
-                if (e.Key == Key.Enter) button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            };
-
-            stack.Children.Add(title);
-            stack.Children.Add(label);
-            stack.Children.Add(passwordBox);
-            stack.Children.Add(button);
-            border.Child = stack;
-            pinWindow.Content = border;
-
-            passwordBox.Focus();
-            pinWindow.ShowDialog();
-        }
-
-        private void DisableAllHotkeysExceptPin()
-        {
-            UnregisterHotKey(_hwnd, HOTKEY_HIDE);
-            UnregisterHotKey(_hwnd, HOTKEY_FLIP);
-            UnregisterHotKey(_hwnd, HOTKEY_LOCK_POS);
-            UnregisterHotKey(_hwnd, HOTKEY_DESTRUCT);
-            UnregisterHotKey(_hwnd, HOTKEY_OPTIONS);
-            UnregisterHotKey(_hwnd, HOTKEY_COMPACT);
-            UnregisterArrowHotkeys();
-        }
-
         private void SelfDestruct()
         {
             Debug.WriteLine("💥 SELF DESTRUCT ACTIVATED");
-
-            // Delete PIN file if exists
-            if (File.Exists(PIN_FILE))
-            {
-                File.Delete(PIN_FILE);
-            }
-
-            // Close application
             Application.Current.Shutdown();
         }
 
         private void ShowOptionsMenu()
         {
-            if (isPinLocked) return;
-
             var optionsWindow = new Window
             {
                 Width = 350,
@@ -600,18 +305,17 @@ namespace SystemHelper
             };
 
             // Size slider
-            // Size slider
             var sizeLabel = new TextBlock
             {
-                Text = isCompactMode ? $"Compact Size: {Width:F0}" : $"Board Size: {Width:F0}",
+                Text = $"Size: {Width:F0}",
                 Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
                 Margin = new Thickness(0, 20, 0, 8),
                 FontSize = 14
             };
             var sizeSlider = new Slider
             {
-                Minimum = isCompactMode ? 40 : 100,
-                Maximum = isCompactMode ? 200 : 400,
+                Minimum = 100,
+                Maximum = 400,
                 Value = Width,
                 TickFrequency = 10,
                 IsSnapToTickEnabled = true,
@@ -621,14 +325,9 @@ namespace SystemHelper
             {
                 Width = e.NewValue;
                 Height = e.NewValue;
-
-                if (!isCompactMode)
-                {
-                    savedSize = e.NewValue;
-                }
-
+                savedSize = e.NewValue;
                 ClampPosition();
-                sizeLabel.Text = isCompactMode ? $"Compact Size: {e.NewValue:F0}" : $"Board Size: {e.NewValue:F0}";
+                sizeLabel.Text = $"Size: {e.NewValue:F0}";
             };
 
             var closeButton = new Button
@@ -663,13 +362,10 @@ namespace SystemHelper
 
         private void ToggleLock()
         {
-            if (isPinLocked) return;
-
             isLocked = !isLocked;
             if (isLocked)
             {
                 UnregisterArrowHotkeys();
-                // Keep click-through enabled even when locked
                 EnableClickThrough();
                 Debug.WriteLine("🔒 Position locked (Ctrl+Shift+L) - still click-through");
             }
@@ -683,14 +379,9 @@ namespace SystemHelper
 
         private void FlipBoard()
         {
-            if (isPinLocked) return;
-
-            Dispatcher.Invoke(() =>
-            {
-                isFlipped = !isFlipped;
-                Debug.WriteLine($"🔄 Board Flipped (Ctrl+Shift+F): {isFlipped}");
-                UpdateChessBoard(currentFen, currentBestMove);
-            });
+            isFlipped = !isFlipped;
+            Debug.WriteLine($"🔄 Board Flipped (Ctrl+Shift+F): {isFlipped}");
+            UpdateChessBoard(currentFen, currentBestMove);
         }
 
         private void ToggleVisibility()
@@ -702,19 +393,12 @@ namespace SystemHelper
             }
             else
             {
-                // Trying to show - check if PIN locked
-                if (isPinLocked)
-                {
-                    ShowPinDialog(false); // Ask for PIN to unlock
-                }
-                else
-                {
-                    Visibility = Visibility.Visible;
-                    Activate();
-                    Debug.WriteLine("🔼 GUI visible (Ctrl+Shift+H)");
-                }
+                Visibility = Visibility.Visible;
+                Activate();
+                Debug.WriteLine("🔼 GUI visible (Ctrl+Shift+H)");
             }
         }
+
         private void EnableClickThrough()
         {
             var exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
@@ -732,9 +416,6 @@ namespace SystemHelper
 
         private void MainWindow_KeyDown(object sender, KeyEventArgs e)
         {
-            if (isPinLocked) return;
-
-            // Keep these for when window has focus
             if (e.Key == Key.F)
             {
                 FlipBoard();
@@ -751,13 +432,13 @@ namespace SystemHelper
                 ChessBoard.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             }
 
+            // Pre-create all squares and cache them
             for (int row = 0; row < 8; row++)
             {
                 for (int col = 0; col < 8; col++)
                 {
                     var square = new Border
                     {
-                        Name = $"Square_{row}_{col}",
                         Background = (row + col) % 2 == 0
                             ? new SolidColorBrush(Color.FromRgb(240, 217, 181))
                             : new SolidColorBrush(Color.FromRgb(181, 136, 99))
@@ -775,9 +456,12 @@ namespace SystemHelper
                     Grid.SetRow(square, row);
                     Grid.SetColumn(square, col);
                     ChessBoard.Children.Add(square);
+
+                    // Cache the square for fast lookup
+                    squareCache[row, col] = square;
                 }
             }
-            Debug.WriteLine("✅ Chess board initialized");
+            Debug.WriteLine("✅ Chess board initialized with cache");
         }
 
         private void UpdateChessBoard(string fen, string? bestMove = null)
@@ -785,83 +469,84 @@ namespace SystemHelper
             currentFen = fen;
             currentBestMove = bestMove ?? "";
 
-            if (isCompactMode)
+            // Parse FEN outside of Dispatcher for performance
+            string[] fenParts = fen.Split(' ');
+            string position = fenParts[0];
+            string[] ranks = position.Split('/');
+
+            // Pre-calculate all piece positions and highlights
+            var piecePositions = new List<(int row, int col, string piece)>();
+            var highlights = new List<(int row, int col)>();
+
+            // Calculate piece positions
+            for (int rank = 0; rank < 8; rank++)
             {
-                UpdateCompactDisplay();
-                return;
+                int file = 0;
+                foreach (char c in ranks[rank])
+                {
+                    if (char.IsDigit(c))
+                    {
+                        file += c - '0';
+                    }
+                    else
+                    {
+                        string pieceKey = char.IsUpper(c) ? "w" : "b";
+                        pieceKey += char.ToUpper(c);
+                        if (pieceUnicode.ContainsKey(pieceKey))
+                        {
+                            var (displayRow, displayCol) = GetDisplayCoords(rank, file);
+                            piecePositions.Add((displayRow, displayCol, pieceUnicode[pieceKey]));
+                        }
+                        file++;
+                    }
+                }
             }
 
+            // Calculate highlights
+            if (!string.IsNullOrEmpty(currentBestMove) && currentBestMove.Length >= 4)
+            {
+                string from = currentBestMove.Substring(0, 2);
+                string to = currentBestMove.Substring(2, 2);
+                var (fromRow, fromCol) = SquareNameToDisplayCoords(from);
+                var (toRow, toCol) = SquareNameToDisplayCoords(to);
+                highlights.Add((fromRow, fromCol));
+                highlights.Add((toRow, toCol));
+            }
+
+            // Now update UI in single Dispatcher call
             Dispatcher.Invoke(() =>
             {
-                string[] fenParts = fen.Split(' ');
-                string position = fenParts[0];
-                string[] ranks = position.Split('/');
-
-                // Reset board
-                foreach (var child in ChessBoard.Children)
+                // Reset all squares using cache
+                for (int row = 0; row < 8; row++)
                 {
-                    if (child is Border border)
+                    for (int col = 0; col < 8; col++)
                     {
-                        int row = Grid.GetRow(border);
-                        int col = Grid.GetColumn(border);
-                        border.Background = (row + col) % 2 == 0
+                        var square = squareCache[row, col];
+                        square.Background = (row + col) % 2 == 0
                             ? new SolidColorBrush(Color.FromRgb(240, 217, 181))
                             : new SolidColorBrush(Color.FromRgb(181, 136, 99));
 
-                        if (border.Child is TextBlock tb)
+                        if (square.Child is TextBlock tb)
                         {
                             tb.Text = "";
                         }
                     }
                 }
 
-                // Place pieces
-                for (int rank = 0; rank < 8; rank++)
+                // Place all pieces
+                foreach (var (row, col, piece) in piecePositions)
                 {
-                    int file = 0;
-                    foreach (char c in ranks[rank])
+                    if (squareCache[row, col].Child is TextBlock tb)
                     {
-                        if (char.IsDigit(c))
-                        {
-                            file += c - '0';
-                        }
-                        else
-                        {
-                            string pieceKey = char.IsUpper(c) ? "w" : "b";
-                            pieceKey += char.ToUpper(c);
-                            if (pieceUnicode.ContainsKey(pieceKey))
-                            {
-                                var (displayRow, displayCol) = GetDisplayCoords(rank, file);
-                                var square = GetSquare(displayRow, displayCol);
-                                if (square?.Child is TextBlock tb)
-                                {
-                                    tb.Text = pieceUnicode[pieceKey];
-                                }
-                            }
-                            file++;
-                        }
+                        tb.Text = piece;
                     }
                 }
 
-                // Highlight best move
-                if (!string.IsNullOrEmpty(currentBestMove) && currentBestMove.Length >= 4)
+                // Apply highlights
+                var highlightBrush = new SolidColorBrush(Color.FromRgb(255, 255, 100));
+                foreach (var (row, col) in highlights)
                 {
-                    string from = currentBestMove.Substring(0, 2);
-                    string to = currentBestMove.Substring(2, 2);
-                    var (fromRow, fromCol) = SquareNameToDisplayCoords(from);
-                    var (toRow, toCol) = SquareNameToDisplayCoords(to);
-
-                    var fromSquare = GetSquare(fromRow, fromCol);
-                    var toSquare = GetSquare(toRow, toCol);
-
-                    if (fromSquare != null)
-                    {
-                        fromSquare.Background = new SolidColorBrush(Color.FromRgb(255, 255, 100));
-                    }
-                    if (toSquare != null)
-                    {
-                        toSquare.Background = new SolidColorBrush(Color.FromRgb(255, 255, 100));
-                    }
+                    squareCache[row, col].Background = highlightBrush;
                 }
             });
         }
@@ -878,18 +563,6 @@ namespace SystemHelper
             int file = square[0] - 'a';
             int rank = 8 - (square[1] - '0');
             return GetDisplayCoords(rank, file);
-        }
-
-        private Border? GetSquare(int row, int col)
-        {
-            foreach (var child in ChessBoard.Children)
-            {
-                if (child is Border border && Grid.GetRow(border) == row && Grid.GetColumn(border) == col)
-                {
-                    return border;
-                }
-            }
-            return null;
         }
 
         async Task RunListener()
@@ -931,95 +604,84 @@ namespace SystemHelper
                         ctx.Response.OutputStream.Close();
                         continue;
                     }
+
                     if (ctx.Request.HttpMethod == HttpMethod.Post.Method)
+                    {
+                        Debug.WriteLine(" 📨 POST request received");
+                        ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
+
+                        string requestBody;
+                        using (var sr = new StreamReader(ctx.Request.InputStream))
                         {
-                            Debug.WriteLine(" 📨 POST request received");
-                            ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
+                            requestBody = await sr.ReadToEndAsync();
+                        }
 
-                            string requestBody;
-                            using (var sr = new StreamReader(ctx.Request.InputStream))
-                            {
-                                requestBody = await sr.ReadToEndAsync();
-                            }
-                            Debug.WriteLine($" 📄 Request body length: {requestBody.Length}");
+                        JsonElement jss;
+                        try
+                        {
+                            jss = JsonSerializer.Deserialize<JsonElement>(requestBody);
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($" ❌ JSON parse error: {ex.Message}");
+                            ctx.Response.StatusCode = 400;
+                            ctx.Response.OutputStream.Close();
+                            continue;
+                        }
 
-                            JsonElement jss;
-                            try
+                        try
+                        {
+                            var position = jss.GetProperty("position").GetString()!;
+
+                            if (position == lastPgn)
                             {
-                                jss = JsonSerializer.Deserialize<JsonElement>(requestBody);
-                                Debug.WriteLine(" ✓ JSON parsed successfully");
-                            }
-                            catch (Exception ex)
-                            {
-                                Debug.WriteLine($" ❌ JSON parse error: {ex.Message}");
-                                ctx.Response.StatusCode = 400;
+                                Debug.WriteLine(" ⏭️ Same position, skipping");
+                                ctx.Response.StatusCode = 200;
                                 ctx.Response.OutputStream.Close();
                                 continue;
                             }
 
-                            try
+                            lastPgn = position;
+                            Debug.WriteLine($" ♟️ New position ({position.Length} chars)");
+
+                            string fen = ConvertPgnToFen(position);
+
+                            var startTime = DateTime.Now;
+                            var board = new Board();
+                            board.LoadPosition(fen);
+
+                            var move = bot.Think(
+                                new ChessChallenge.API.Board(board),
+                                new ChessChallenge.API.Timer(10000, 10000, 1000, 0)
+                            );
+
+                            var thinkTime = (DateTime.Now - startTime).TotalMilliseconds;
+
+                            if (move.RawValue == 0)
                             {
-                                Debug.WriteLine(" 🔍 Extracting position from JSON...");
-                                var position = jss.GetProperty("position").GetString()!;
-                                Debug.WriteLine($" ✓ Position extracted: {position.Substring(0, Math.Min(50, position.Length))}...");
-
-                                if (position == lastPgn)
-                                {
-                                    Debug.WriteLine(" ⏭️ Same position as before, skipping analysis");
-                                    ctx.Response.StatusCode = 200;
-                                    ctx.Response.OutputStream.Close();
-                                    continue;
-                                }
-
-                                lastPgn = position;
-                                Debug.WriteLine($" ♟️ New position detected ({position.Length} chars)");
-                                Debug.WriteLine($" 🔄 Converting PGN to FEN...");
-                                string fen = ConvertPgnToFen(position);
-                                Debug.WriteLine($" ✓ FEN conversion complete: {fen.Substring(0, Math.Min(60, fen.Length))}...");
-
-                                var startTime = DateTime.Now;
-                                Debug.WriteLine(" 🧠 Creating board and loading position...");
-                                var board = new Board();
-                                board.LoadPosition(fen);
-                                Debug.WriteLine(" ✓ Board loaded");
-
-                                Debug.WriteLine(" 🤔 Bot thinking...");
-                                var move = bot.Think(
-                                    new ChessChallenge.API.Board(board),
-                                    board.IsWhiteToMove
-                                        ? new ChessChallenge.API.Timer(10000, 10000, 1000, 0)
-                                        : new ChessChallenge.API.Timer(10000, 10000, 1000, 0)
-                                );
-
-                                var thinkTime = (DateTime.Now - startTime).TotalMilliseconds;
-
-                                if (move.RawValue == 0)
-                                {
-                                    Debug.WriteLine(" ⚠️ Bot returned NULL move (RawValue = 0)!");
-                                    Debug.WriteLine($" ⚠️ Board state - White to move: {board.IsWhiteToMove}");
-                                    UpdateChessBoard(fen, "");
-                                }
-                                else
-                                {
-                                    var bestMove = MoveUtility.GetMoveNameUCI(new Move(move.RawValue));
-                                    Debug.WriteLine($" ✅ Best move found: {bestMove} ({thinkTime:F0}ms)");
-                                    UpdateChessBoard(fen, bestMove);
-                                }
+                                Debug.WriteLine(" ⚠️ NULL move");
+                                UpdateChessBoard(fen, "");
                             }
-                            catch (Exception ex)
+                            else
                             {
-                                Debug.WriteLine($" ❌ ERROR in processing: {ex.Message}");
-                                Debug.WriteLine($" 📍 Stack trace: {ex.StackTrace}");
-                                Debug.WriteLine($" 📍 Inner exception: {ex.InnerException?.Message ?? "none"}");
-                                currentFen = FenUtility.StartPositionFEN;
-                                UpdateChessBoard(currentFen, "");
+                                var bestMove = MoveUtility.GetMoveNameUCI(new Move(move.RawValue));
+                                Debug.WriteLine($" ✅ Move: {bestMove} ({thinkTime:F0}ms)");
+                                UpdateChessBoard(fen, bestMove);
                             }
-
-                            ctx.Response.StatusCode = 200;
-                            ctx.Response.OutputStream.Close();
                         }
-                        Debug.WriteLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($" ❌ ERROR: {ex.Message}");
+                            currentFen = FenUtility.StartPositionFEN;
+                            UpdateChessBoard(currentFen, "");
+                        }
+
+                        ctx.Response.StatusCode = 200;
+                        ctx.Response.OutputStream.Close();
                     }
+
+                    Debug.WriteLine("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                }
                 catch (Exception ex)
                 {
                     Debug.WriteLine($"❌ LISTENER ERROR: {ex.Message}");
@@ -1029,21 +691,15 @@ namespace SystemHelper
 
         private string ConvertPgnToFen(string pgn)
         {
-            Debug.WriteLine(" 🔧 ConvertPgnToFen START");
-            Debug.WriteLine($" 📥 Input PGN length: {pgn.Length}");
-
             var lines = pgn.Split('\n');
-            Debug.WriteLine($" 📋 Split into {lines.Length} lines");
-
             string movesText = "";
+
             foreach (var line in lines)
             {
                 if (line.Trim().StartsWith("[")) continue;
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 movesText += " " + line.Trim();
             }
-
-            Debug.WriteLine($" 📝 Raw moves text: {movesText}");
 
             movesText = Regex.Replace(movesText, @"\d+\.", " ");
             movesText = Regex.Replace(movesText, @"[+#]", "");
@@ -1052,21 +708,15 @@ namespace SystemHelper
             movesText = Regex.Replace(movesText, @"\s+", " ");
             movesText = movesText.Trim();
 
-            Debug.WriteLine($" 🧹 Cleaned moves: {movesText}");
-
             var board = new Board();
             board.LoadPosition(FenUtility.StartPositionFEN);
-            Debug.WriteLine(" ✓ Starting position loaded");
 
             if (!string.IsNullOrWhiteSpace(movesText))
             {
                 var moves = movesText.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                Debug.WriteLine($" 🎯 Processing {moves.Length} moves...");
 
-                int moveNum = 0;
                 foreach (var moveStr in moves)
                 {
-                    moveNum++;
                     if (string.IsNullOrWhiteSpace(moveStr)) continue;
 
                     string processedMove = moveStr;
@@ -1079,34 +729,13 @@ namespace SystemHelper
                         string piece = promotionMatch.Groups[3].Value;
                         string startRank = targetRank == "8" ? "7" : "2";
                         processedMove = $"{file}{startRank}{file}{targetRank}{piece}";
-                        Debug.WriteLine($" 🔄 Expanded promotion: '{moveStr}' -> '{processedMove}'");
                     }
 
-                    Debug.WriteLine($" #{moveNum}: Attempting '{processedMove}'");
-                    try
-                    {
-                        bool success = board.TryMakeMoveFromSan(processedMove, out Move move);
-                        if (!success)
-                        {
-                            Debug.WriteLine($" ❌ FAILED to parse move '{processedMove}'");
-                            Debug.WriteLine($" 📍 Current FEN: {FenUtility.CurrentFen(board)}");
-                        }
-                        else
-                        {
-                            Debug.WriteLine($" ✓ Success");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($" ❌ EXCEPTION on move '{processedMove}': {ex.Message}");
-                    }
+                    board.TryMakeMoveFromSan(processedMove, out Move move);
                 }
             }
 
-            string finalFen = FenUtility.CurrentFen(board);
-            Debug.WriteLine($" 📤 Final FEN: {finalFen}");
-            Debug.WriteLine(" 🔧 ConvertPgnToFen END");
-            return finalFen;
+            return FenUtility.CurrentFen(board);
         }
     }
 }
