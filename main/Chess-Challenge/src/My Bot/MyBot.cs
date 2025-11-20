@@ -3,7 +3,8 @@ using System;
 using static System.Math;
 using static ChessChallenge.API.BitboardHelper;
 
-public class MyBot : IChessBot {
+public class MyBot : IChessBot
+{
     public int maxDepth = 999; // #DEBUG
 
     public void SetMaxDepth(int depth)
@@ -18,6 +19,10 @@ public class MyBot : IChessBot {
     Board board;
 
     Move searchBestMove, rootBestMove;
+
+    // #ANALYSIS - Track evaluation components
+    public EvalComponents lastEvalComponents;
+    public bool trackEvalComponents = false;
 
     // this tuple is 24 bytes, so the transposition table is precisely 192MiB (~201 MB)
     readonly (
@@ -53,7 +58,8 @@ public class MyBot : IChessBot {
     // bitshift amount is implicitly modulo 64, also used in pst part of eval function
     int EvalWeight(int item) => (int)(packedData[item >> 1] >> item * 32);
 
-    public Move Think(Board boardOrig, Timer timerOrig) {
+    public Move Think(Board boardOrig, Timer timerOrig)
+    {
         nodes = 0; // #DEBUG
         board = boardOrig;
         timer = timerOrig;
@@ -61,7 +67,8 @@ public class MyBot : IChessBot {
         maxSearchTime = timer.MillisecondsRemaining / 4;
         searchingDepth = 1;
         do
-            try {
+            try
+            {
                 // Aspiration windows
                 if (Abs(lastScore - Negamax(lastScore - 20, lastScore + 20, searchingDepth)) >= 20)
                     Negamax(-32000, 32000, searchingDepth);
@@ -75,7 +82,9 @@ public class MyBot : IChessBot {
                     lastScore, // #DEBUG
                     nodes * 1000 / (ulong)Max(timer.MillisecondsElapsedThisTurn, 1) // #DEBUG
                 ); // #DEBUG
-            } catch {
+            }
+            catch
+            {
                 // out of time
                 break;
             }
@@ -88,7 +97,8 @@ public class MyBot : IChessBot {
         return rootBestMove;
     }
 
-    public int Negamax(int alpha, int beta, int depth) {
+    public int Negamax(int alpha, int beta, int depth)
+    {
         // abort search if out of time, but we must search at least depth 1
         if (timer.MillisecondsElapsedThisTurn >= maxSearchTime && searchingDepth > 1)
             throw null;
@@ -114,63 +124,99 @@ public class MyBot : IChessBot {
 
             // temp vars
             tmp = 0;
-        if (ttHit) {
-            if (ttDepth >= depth && ttBound switch {
+        if (ttHit)
+        {
+            if (ttDepth >= depth && ttBound switch
+            {
                 2147483647 /* BOUND_LOWER */ => score >= beta,
                 0 /* BOUND_UPPER */ => score <= alpha,
                 // exact cutoffs at pv nodes causes problems, but need it in qsearch for matefinding
                 _ /* BOUND_EXACT */ => nonPv || inQSearch,
             })
                 return score;
-        } else if (depth > 3)
+        }
+        else if (depth > 3)
             // Internal iterative reduction
             depth--;
 
         // this is a local function because the C# JIT doesn't optimize very large functions well
         // we do packed phased evaluation, so weights are of the form (eg << 16) + mg
-        int Eval(ulong pieces) {
+        int Eval(ulong pieces)
+        {
+            // #ANALYSIS - Initialize component tracking
+            EvalComponents components = trackEvalComponents ? new EvalComponents() : null;
+
             // use tmp as phase (initialized above)
-            while (pieces != 0) {
+            while (pieces != 0)
+            {
                 int pieceType, sqIndex;
                 Piece piece = board.GetPiece(new(sqIndex = ClearAndGetIndexOfLSB(ref pieces)));
                 pieceType = (int)piece.PieceType;
+
                 // virtual pawn type
                 // consider pawns on the opposite half of the king as distinct piece types (piece 0)
+                int virtualPieceType = pieceType;
                 pieceType -= (sqIndex & 0b111 ^ board.GetKingSquare(pieceIsWhite = piece.IsWhite).File) >> 1 >> pieceType;
-                sqIndex =
-                    // Material
-                    // not incorporated into the psts to allow packing scheme
-                    EvalWeight(112 + pieceType)
-                        // psts
-                        // piece square table weights are restricted to the range 0-255, so the
-                        // bytes between mg and eg and above eg are empty, allowing us to
-                        // interleave another packed weight in that space: ddCCddCCbbAAbbAA
-                        + (int)(
-                            packedData[pieceType * 64 + sqIndex >> 3 ^ (pieceIsWhite ? 0 : 0b111)]
-                                >> (0x01455410 >> sqIndex * 4) * 8
-                                & 0xFF00FF
-                        )
-                        // mobility
-                        // with the virtual pawn type we get 16 consecutive bytes of unused space
-                        // representing impossible pawns on the first/last rank, which is exactly
-                        // enough space to fit the 4 relevant mobility weights
-                        // treating the king as having queen moves is a form of king safety eval
-                        + EvalWeight(11 + pieceType) * GetNumberOfSetBits(
-                            GetSliderAttacks((PieceType)Min(5, pieceType), new(sqIndex), board)
-                        )
-                        // own pawn ahead
-                        + EvalWeight(118 + pieceType) * GetNumberOfSetBits(
-                            (pieceIsWhite ? 0x0101010101010100UL << sqIndex : 0x0080808080808080UL >> 63 - sqIndex)
-                                & board.GetPieceBitboard(PieceType.Pawn, pieceIsWhite)
-                        );
+
+                int materialValue = EvalWeight(112 + pieceType);
+                int pstValue = (int)(
+                    packedData[pieceType * 64 + sqIndex >> 3 ^ (pieceIsWhite ? 0 : 0b111)]
+                        >> (0x01455410 >> sqIndex * 4) * 8
+                        & 0xFF00FF
+                );
+
+                int mobilityCount = GetNumberOfSetBits(
+                    GetSliderAttacks((PieceType)Min(5, pieceType), new(sqIndex), board)
+                );
+                int mobilityValue = EvalWeight(11 + pieceType) * mobilityCount;
+
+                int pawnAheadCount = GetNumberOfSetBits(
+                    (pieceIsWhite ? 0x0101010101010100UL << sqIndex : 0x0080808080808080UL >> 63 - sqIndex)
+                        & board.GetPieceBitboard(PieceType.Pawn, pieceIsWhite)
+                );
+                int pawnAheadValue = EvalWeight(118 + pieceType) * pawnAheadCount;
+
+                sqIndex = materialValue + pstValue + mobilityValue + pawnAheadValue;
+
+                int sign = pieceIsWhite == board.IsWhiteToMove ? 1 : -1;
                 eval += pieceIsWhite == board.IsWhiteToMove ? sqIndex : -sqIndex;
+
+                // #ANALYSIS - Track components
+                if (trackEvalComponents)
+                {
+                    components.Material += materialValue * sign;
+                    components.PieceSquareTables += pstValue * sign;
+                    components.Mobility += mobilityValue * sign;
+                    components.PawnStructure += pawnAheadValue * sign;
+
+                    // Track per-piece-type contributions
+                    components.AddPieceContribution(virtualPieceType, pieceIsWhite, sqIndex * sign);
+
+                    // Track mobility per piece type
+                    components.AddMobilityContribution(virtualPieceType, pieceIsWhite, mobilityCount * sign);
+                }
+
                 // phaseWeightTable = [0, 0, 1, 1, 2, 4, 0]
                 tmp += 0x0421100 >> pieceType * 4 & 0xF;
             }
+
             // the correct way to extract EG eval is (eval + 0x8000) >> 16, but this is shorter and
             // the off-by-one error is insignificant
             // the division is also moved outside Eval to save a token
-            return (short)eval * tmp + eval / 0x10000 * (24 - tmp);
+            int finalEval = (short)eval * tmp + eval / 0x10000 * (24 - tmp);
+
+            // #ANALYSIS - Store components
+            if (trackEvalComponents)
+            {
+                components.Phase = tmp;
+                components.Tempo = 0x000b000a;
+                components.TotalMidgame = (short)eval;
+                components.TotalEndgame = eval / 0x10000;
+                components.FinalScore = finalEval / 24;
+                lastEvalComponents = components;
+            }
+
+            return finalEval;
             // end tmp use
         }
         // using tteval in qsearch causes matefinding issues
@@ -179,7 +225,8 @@ public class MyBot : IChessBot {
         if (inQSearch)
             // stand pat in quiescence search
             alpha = Max(alpha, bestScore = eval);
-        else if (nonPv && eval >= beta && board.TrySkipTurn()) {
+        else if (nonPv && eval >= beta && board.TrySkipTurn())
+        {
             // Pruning based on null move observation
             bestScore = depth <= 4
                 // Reverse Futility Pruning
@@ -212,7 +259,8 @@ public class MyBot : IChessBot {
 
         Array.Sort(scores, moves);
         Move bestMove = default;
-        foreach (Move move in moves) {
+        foreach (Move move in moves)
+        {
             // Delta pruning
             // deltas = [180, 390, 442, 718, 1332]
             // due to sharing of the top bit of each entry with the bottom bit of the next one
@@ -233,7 +281,8 @@ public class MyBot : IChessBot {
                 );
             if (board.IsRepeatedPosition())
                 score = 0;
-            else {
+            else
+            {
                 // this crazy while loop does the null window searches for PVS: first it searches
                 // with the reduced depth, and if it beats alpha it re-searches at full depth
                 // ~alpha is equivalent to -alpha-1 under two's complement
@@ -249,12 +298,15 @@ public class MyBot : IChessBot {
 
             board.UndoMove(move);
 
-            if (score > bestScore) {
+            if (score > bestScore)
+            {
                 alpha = Max(alpha, bestScore = score);
                 bestMove = move;
             }
-            if (score >= beta) {
-                if (!move.IsCapture) {
+            if (score >= beta)
+            {
+                if (!move.IsCapture)
+                {
                     // use tmp as change
                     // Increased history change when eval < alpha
                     // equivalent to tmp = eval < alpha ? -(depth + 1) : depth
@@ -307,4 +359,127 @@ public class MyBot : IChessBot {
         (int)move.MovePieceType,
         move.TargetSquare.Index
     ];
+
+    // #ANALYSIS - Public method to get detailed evaluation of a position
+    public EvalComponents GetDetailedEval(Board evalBoard)
+    {
+        Board oldBoard = board;
+        board = evalBoard;
+        trackEvalComponents = true;
+        lastEvalComponents = null;
+
+        // Evaluate the position
+        ulong pieces = board.AllPiecesBitboard;
+        bool pieceIsWhite;
+        int eval = 0x000b000a; // tempo
+        int tmp = 0; // phase
+
+        EvalComponents components = new EvalComponents();
+
+        while (pieces != 0)
+        {
+            int pieceType, sqIndex;
+            Piece piece = board.GetPiece(new(sqIndex = ClearAndGetIndexOfLSB(ref pieces)));
+            pieceType = (int)piece.PieceType;
+
+            int virtualPieceType = pieceType;
+            pieceType -= (sqIndex & 0b111 ^ board.GetKingSquare(pieceIsWhite = piece.IsWhite).File) >> 1 >> pieceType;
+
+            int materialValue = EvalWeight(112 + pieceType);
+            int pstValue = (int)(
+                packedData[pieceType * 64 + sqIndex >> 3 ^ (pieceIsWhite ? 0 : 0b111)]
+                    >> (0x01455410 >> sqIndex * 4) * 8
+                    & 0xFF00FF
+            );
+
+            int mobilityCount = GetNumberOfSetBits(
+                GetSliderAttacks((PieceType)Min(5, pieceType), new(sqIndex), board)
+            );
+            int mobilityValue = EvalWeight(11 + pieceType) * mobilityCount;
+
+            int pawnAheadCount = GetNumberOfSetBits(
+                (pieceIsWhite ? 0x0101010101010100UL << sqIndex : 0x0080808080808080UL >> 63 - sqIndex)
+                    & board.GetPieceBitboard(PieceType.Pawn, pieceIsWhite)
+            );
+            int pawnAheadValue = EvalWeight(118 + pieceType) * pawnAheadCount;
+
+            int totalPieceValue = materialValue + pstValue + mobilityValue + pawnAheadValue;
+            int sign = pieceIsWhite == board.IsWhiteToMove ? 1 : -1;
+
+            eval += pieceIsWhite == board.IsWhiteToMove ? totalPieceValue : -totalPieceValue;
+
+            components.Material += materialValue * sign;
+            components.PieceSquareTables += pstValue * sign;
+            components.Mobility += mobilityValue * sign;
+            components.PawnStructure += pawnAheadValue * sign;
+            components.AddPieceContribution(virtualPieceType, pieceIsWhite, totalPieceValue * sign);
+            components.AddMobilityContribution(virtualPieceType, pieceIsWhite, mobilityCount * sign);
+
+            tmp += 0x0421100 >> pieceType * 4 & 0xF;
+        }
+
+        int finalEval = (short)eval * tmp + eval / 0x10000 * (24 - tmp);
+
+        components.Phase = tmp;
+        components.Tempo = 0x000b000a;
+        components.TotalMidgame = (short)eval;
+        components.TotalEndgame = eval / 0x10000;
+        components.FinalScore = finalEval / 24;
+
+        trackEvalComponents = false;
+        board = oldBoard;
+
+        return components;
+    }
+}
+
+// #ANALYSIS - Evaluation components tracking class
+public class EvalComponents
+{
+    public int Material;
+    public int PieceSquareTables;
+    public int Mobility;
+    public int PawnStructure;
+    public int Tempo;
+    public int Phase;
+    public int TotalMidgame;
+    public int TotalEndgame;
+    public int FinalScore;
+
+    // Per-piece-type tracking (indexed by PieceType enum)
+    public int[] WhitePieceValues = new int[7];
+    public int[] BlackPieceValues = new int[7];
+    public int[] WhiteMobility = new int[7];
+    public int[] BlackMobility = new int[7];
+
+    public void AddPieceContribution(int pieceType, bool isWhite, int value)
+    {
+        if (isWhite)
+            WhitePieceValues[pieceType] += value;
+        else
+            BlackPieceValues[pieceType] += value;
+    }
+
+    public void AddMobilityContribution(int pieceType, bool isWhite, int mobility)
+    {
+        if (isWhite)
+            WhiteMobility[pieceType] += mobility;
+        else
+            BlackMobility[pieceType] += mobility;
+    }
+
+    public override string ToString()
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Final Score: {FinalScore}");
+        sb.AppendLine($"Material: {Material}");
+        sb.AppendLine($"PST: {PieceSquareTables}");
+        sb.AppendLine($"Mobility: {Mobility}");
+        sb.AppendLine($"Pawn Structure: {PawnStructure}");
+        sb.AppendLine($"Tempo: {Tempo}");
+        sb.AppendLine($"Phase: {Phase}/24");
+        sb.AppendLine($"MG Eval: {TotalMidgame}");
+        sb.AppendLine($"EG Eval: {TotalEndgame}");
+        return sb.ToString();
+    }
 }
