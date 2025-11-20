@@ -114,9 +114,10 @@ curl -X POST http://localhost:30012/ \
 ## Project Structure
 
 ```
-SchachAnalyseGUI/
+Cheatmate/
 ├── MainWindow.xaml           # GUI layout and styling
 ├── MainWindow.xaml.cs         # Main application logic and HTTP listener
+ChessChallenge/API/
 ├── GroqAIHelper.cs            # AI explanation integration
 ├── MyBot.cs                   # Chess engine (minimax algorithm)
 ├── MyBotAnalyzer.cs           # Position analysis utilities
@@ -129,7 +130,7 @@ SchachAnalyseGUI/
 
 - **C# / .NET Framework**: Core application and WPF GUI
 - **Custom Chess Engine**: Minimax algorithm with alpha-beta pruning
-- **Groq API**: LLaMA 3.3 70B for natural language explanations
+- **Groq API**: LLaMA 3.3 5.5B for fast responses (up to 1ms)
 - **System.Net.HttpListener**: Local HTTP server for position input
 - **WinAPI Interop**: Global hotkeys and window management
 - **JSON Parsing**: Position data serialization/deserialization
@@ -199,4 +200,5 @@ Contributions are welcome! Areas for improvement:
 
 ---
 
-**Note**: For optimal stealth, run with administrator privileges and ensure no conflicting applications are using port 30012.
+The use of CHEATMATE is at your own risk. The tool is provided for educational and demonstration purposes only. 
+CHEATMATE assumes no liability for damages or violations that may arise from the use. There are no claims as to the function, security or integrity of the software.
