@@ -1,10 +1,7 @@
 # Cheatmate - Hidden Chess Assistant
 
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/cyber-dev-skalovsi/SchachAnalyseGUI)  
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)  
 [![Language](https://img.shields.io/badge/language-C%23-blue)](https://docs.microsoft.com/en-us/dotnet/csharp/)   
-**Development Period:** 2021–2025  
-**Focus:** Real-time analysis, GUI apps, game design  
 
 Completely custom-built for discreet chess analysis, with stealth features for tournaments or training. Processes PGN positions via HTTP and suggests moves from a local AI bot. Modular and open-source—extend with Stockfish for deeper play.
 
