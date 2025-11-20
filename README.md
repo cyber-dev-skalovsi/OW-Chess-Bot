@@ -181,10 +181,6 @@ docs/screenshots/
 └── stealth-mode.png         # Overlay with click-through enabled
 ```
 
-## Security & Ethics Notice
-
-This tool is designed for chess training, analysis, and educational purposes. Using automated assistance during rated games or tournaments may violate platform terms of service and chess federation rules. Always ensure you're complying with applicable regulations when using analysis tools.
-
 ## Contributing
 
 Contributions are welcome! Areas for improvement:
