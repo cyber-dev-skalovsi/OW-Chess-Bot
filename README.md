@@ -200,9 +200,3 @@ Contributions are welcome! Areas for improvement:
 ---
 
 **Note**: For optimal stealth, run with administrator privileges and ensure no conflicting applications are using port 30012.
-[4](https://github.com/goharbor/harbor/issues/778)
-[5](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-readmes)
-[6](https://docs.gitlab.com/user/markdown/)
-[7](https://www.geeksforgeeks.org/git/getting-started-with-writing-and-formatting-on-github/)
-[8](https://learn.microsoft.com/en-us/azure/devops/project/wiki/markdown-guidance?view=azure-devops)
-[9](https://www.markdownguide.org/basic-syntax/)
