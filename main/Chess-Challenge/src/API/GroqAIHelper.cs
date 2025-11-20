@@ -9,7 +9,7 @@ namespace ChessChallenge.AI
 {
     public class GroqAIHelper
     {
-        private readonly string GROQ_API_KEY = "secretgroqkey";
+        private readonly string GROQ_API_KEY = "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";
         private readonly HttpClient httpClient;
 
         public GroqAIHelper()
