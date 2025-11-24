@@ -1,6 +1,7 @@
 ﻿using ChessChallenge.AI;
 using ChessChallenge.Chess;
 using ChessChallenge.Evaluation;
+using Microsoft.Win32; // Required for OpenFileDialog
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -20,19 +21,51 @@ using System.Windows.Media;
 
 namespace SystemHelper
 {
+    // Simple class to hold our settings
+    public class AppSettings
+    {
+        public double Opacity { get; set; } = 0.5;
+        public double Size { get; set; } = 200;
+        public bool IsApiEnabled { get; set; } = true;
+        public bool IsChatbotEnabled { get; set; } = true;
+        public int BotDepth { get; set; } = 6;
+
+        // New Engine Settings
+        public bool UseExternalEngine { get; set; } = false;
+        public string EnginePath { get; set; } = "";
+        public string EngineCommand { get; set; } = "go nodes 1"; // Default to "LLM" mode
+    }
+
     public partial class MainWindow : Window
     {
         private MyBot bot;
-        private GroqAIHelper groqHelper;
+        private GroqAIHelper? groqHelper;
         private bool isFlipped = false;
         private string currentFen = FenUtility.StartPositionFEN;
         private string currentBestMove = "";
         private string lastPgn = "";
         private bool isLocked = false;
+
+        // External Engine Process
+        private Process? _engineProcess;
+        private bool _isEngineRunning = false;
+
+        // Analysis state
         private double evalBeforeOpponentMove = 0.0;
         private string lastFenBeforeOpponent = "";
+
+        // Settings fields (loaded from file)
         private bool isApiConnectionEnabled = true;
         private bool isChatbotEnabled = true;
+        private int currentBotDepth = 6;
+        private double savedOpacity = 0.5;
+        private double savedSize = 200;
+
+        private bool useExternalEngine = false;
+        private string externalEnginePath = "";
+        private string externalEngineCommand = "go nodes 1";
+
+        private const string SettingsFile = "settings.json";
 
         private Dictionary<string, string> pieceUnicode = new Dictionary<string, string>
         {
@@ -41,9 +74,8 @@ namespace SystemHelper
         };
 
         private double screenLeft, screenTop, screenRight, screenBottom;
-        private double savedOpacity = 0.5;
-        private double savedSize = 200;
 
+        // --- DLL IMPORTS ---
         [DllImport("user32.dll")]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
         [DllImport("user32.dll")]
@@ -53,6 +85,7 @@ namespace SystemHelper
         [DllImport("user32.dll")]
         private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
+        // Constants
         private const int HOTKEY_HIDE = 9000;
         private const int HOTKEY_LEFT = 9001;
         private const int HOTKEY_UP = 9002;
@@ -62,9 +95,11 @@ namespace SystemHelper
         private const int HOTKEY_LOCK_POS = 9006;
         private const int HOTKEY_DESTRUCT = 9007;
         private const int HOTKEY_OPTIONS = 9008;
+
         private const uint MOD_CONTROL = 0x0002;
         private const uint MOD_SHIFT = 0x0004;
         private const uint MOD_CTRL_SHIFT = MOD_CONTROL | MOD_SHIFT;
+
         private const uint VK_H = 0x48;
         private const uint VK_F = 0x46;
         private const uint VK_L = 0x4C;
@@ -74,9 +109,11 @@ namespace SystemHelper
         private const uint VK_UP = 0x26;
         private const uint VK_RIGHT = 0x27;
         private const uint VK_DOWN = 0x28;
+
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_LAYERED = 0x80000;
         private const int WS_EX_TRANSPARENT = 0x20;
+
         private IntPtr _hwnd;
         private bool _isClickThrough = true;
         private const double MOVE_STEP = 10.0;
@@ -85,8 +122,11 @@ namespace SystemHelper
         public MainWindow()
         {
             InitializeComponent();
+            LoadSettings();
+
             this.Title = "";
             ShowInTaskbar = false;
+
             screenLeft = SystemParameters.WorkArea.Left;
             screenTop = SystemParameters.WorkArea.Top;
             screenRight = SystemParameters.WorkArea.Right;
@@ -94,21 +134,14 @@ namespace SystemHelper
 
             Width = savedSize;
             Height = savedSize;
-
             Top = 45;
             Left = screenRight - Width + 8;
             ClampPosition();
+
             Topmost = true;
             Opacity = savedOpacity;
 
-            this.SizeToContent = SizeToContent.Height;
-
-            MouseLeftButtonDown += (s, e) =>
-            {
-                if (!_isClickThrough)
-                    DragMove();
-            };
-
+            MouseLeftButtonDown += (s, e) => { if (!_isClickThrough) DragMove(); };
             KeyDown += MainWindow_KeyDown;
 
             Loaded += (s, e) =>
@@ -117,20 +150,161 @@ namespace SystemHelper
                 RegisterAllHotkeys();
                 HwndSource.FromHwnd(_hwnd).AddHook(HwndHook);
                 EnableClickThrough();
+
+                // Initialize Bot & Engine in background
+                Task.Run(() =>
+                {
+                    bot = new MyBot();
+                    bot.SetMaxDepth(currentBotDepth);
+                    try { groqHelper = new GroqAIHelper(); } catch { }
+
+                    if (useExternalEngine) InitializeExternalEngine();
+
+                    Debug.WriteLine($"✅ Startup complete. Engine Enabled: {useExternalEngine}");
+                });
             };
 
             Closing += (s, e) =>
             {
+                StopExternalEngine();
+                SaveSettings();
                 UnregisterAllHotkeys();
             };
 
-            bot = new MyBot();
-            bot.SetMaxDepth(6);
-            groqHelper = new GroqAIHelper();
             InitializeChessBoard();
             UpdateChessBoard(currentFen);
+
             Task.Run(RunListener);
         }
+
+        // --- EXTERNAL ENGINE LOGIC ---
+        private void InitializeExternalEngine()
+        {
+            StopExternalEngine(); // Clean up if running
+
+            if (string.IsNullOrWhiteSpace(externalEnginePath) || !File.Exists(externalEnginePath))
+            {
+                Debug.WriteLine("❌ Engine path invalid or empty.");
+                return;
+            }
+
+            try
+            {
+                _engineProcess = new Process();
+                _engineProcess.StartInfo.FileName = externalEnginePath;
+                _engineProcess.StartInfo.UseShellExecute = false;
+                _engineProcess.StartInfo.RedirectStandardInput = true;
+                _engineProcess.StartInfo.RedirectStandardOutput = true;
+                _engineProcess.StartInfo.CreateNoWindow = true;
+                _engineProcess.Start();
+
+                _engineProcess.StandardInput.WriteLine("uci");
+                _engineProcess.StandardInput.WriteLine("isready");
+                _isEngineRunning = true;
+                Debug.WriteLine($"✅ External Engine Started: {Path.GetFileName(externalEnginePath)}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"❌ Failed to start engine: {ex.Message}");
+                _isEngineRunning = false;
+            }
+        }
+
+        private void StopExternalEngine()
+        {
+            if (_engineProcess != null && !_engineProcess.HasExited)
+            {
+                try { _engineProcess.Kill(); } catch { }
+                _engineProcess.Dispose();
+            }
+            _isEngineRunning = false;
+        }
+
+        private string GetBestMoveFromExternalEngine(string fen)
+        {
+            if (!_isEngineRunning || _engineProcess == null || _engineProcess.HasExited)
+            {
+                InitializeExternalEngine(); // Try to restart
+                if (!_isEngineRunning) return "";
+            }
+
+            try
+            {
+                // Clean buffer (optional, but safer)
+                while (_engineProcess.StandardOutput.Peek() > -1) _engineProcess.StandardOutput.ReadLine();
+
+                _engineProcess.StandardInput.WriteLine($"position fen {fen}");
+                _engineProcess.StandardInput.WriteLine(externalEngineCommand);
+
+                // Read until bestmove
+                string? line;
+                // Safety timeout could be added here, but simplified for now
+                while ((line = _engineProcess.StandardOutput.ReadLine()) != null)
+                {
+                    if (line.StartsWith("bestmove"))
+                    {
+                        // Format: "bestmove e2e4 ponder ..."
+                        var parts = line.Split(' ');
+                        return parts.Length > 1 ? parts[1] : "";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"❌ Engine communication error: {ex.Message}");
+            }
+            return "";
+        }
+
+        private void LoadSettings()
+        {
+            try
+            {
+                if (File.Exists(SettingsFile))
+                {
+                    string json = File.ReadAllText(SettingsFile);
+                    var settings = JsonSerializer.Deserialize<AppSettings>(json);
+                    if (settings != null)
+                    {
+                        savedOpacity = settings.Opacity;
+                        savedSize = settings.Size;
+                        isApiConnectionEnabled = settings.IsApiEnabled;
+                        isChatbotEnabled = settings.IsChatbotEnabled;
+                        currentBotDepth = Math.Clamp(settings.BotDepth, 4, 14);
+
+                        // Load engine settings
+                        useExternalEngine = settings.UseExternalEngine;
+                        externalEnginePath = settings.EnginePath;
+                        externalEngineCommand = settings.EngineCommand;
+                    }
+                }
+            }
+            catch (Exception ex) { Debug.WriteLine($"Failed to load settings: {ex.Message}"); }
+        }
+
+        private void SaveSettings()
+        {
+            try
+            {
+                var settings = new AppSettings
+                {
+                    Opacity = this.Opacity,
+                    Size = this.Width,
+                    IsApiEnabled = isApiConnectionEnabled,
+                    IsChatbotEnabled = isChatbotEnabled,
+                    BotDepth = currentBotDepth,
+                    UseExternalEngine = useExternalEngine,
+                    EnginePath = externalEnginePath,
+                    EngineCommand = externalEngineCommand
+                };
+                var options = new JsonSerializerOptions { WriteIndented = true };
+                string json = JsonSerializer.Serialize(settings, options);
+                File.WriteAllText(SettingsFile, json);
+            }
+            catch { }
+        }
+
+        // --- REST OF THE CODE ---
 
         private void RegisterAllHotkeys()
         {
@@ -182,66 +356,29 @@ namespace SystemHelper
                 int hotkeyId = wParam.ToInt32();
                 switch (hotkeyId)
                 {
-                    case HOTKEY_HIDE:
-                        ToggleVisibility();
-                        break;
-                    case HOTKEY_LEFT:
-                        if (!isLocked)
-                        {
-                            Left -= MOVE_STEP;
-                            ClampPosition();
-                        }
-                        break;
-                    case HOTKEY_UP:
-                        if (!isLocked)
-                        {
-                            Top -= MOVE_STEP;
-                            ClampPosition();
-                        }
-                        break;
-                    case HOTKEY_RIGHT:
-                        if (!isLocked)
-                        {
-                            Left += MOVE_STEP;
-                            ClampPosition();
-                        }
-                        break;
-                    case HOTKEY_DOWN:
-                        if (!isLocked)
-                        {
-                            Top += MOVE_STEP;
-                            ClampPosition();
-                        }
-                        break;
-                    case HOTKEY_FLIP:
-                        FlipBoard();
-                        break;
-                    case HOTKEY_LOCK_POS:
-                        ToggleLock();
-                        break;
-                    case HOTKEY_DESTRUCT:
-                        SelfDestruct();
-                        break;
-                    case HOTKEY_OPTIONS:
-                        ShowOptionsMenu();
-                        break;
+                    case HOTKEY_HIDE: ToggleVisibility(); break;
+                    case HOTKEY_LEFT: if (!isLocked) { Left -= MOVE_STEP; ClampPosition(); } break;
+                    case HOTKEY_UP: if (!isLocked) { Top -= MOVE_STEP; ClampPosition(); } break;
+                    case HOTKEY_RIGHT: if (!isLocked) { Left += MOVE_STEP; ClampPosition(); } break;
+                    case HOTKEY_DOWN: if (!isLocked) { Top += MOVE_STEP; ClampPosition(); } break;
+                    case HOTKEY_FLIP: FlipBoard(); break;
+                    case HOTKEY_LOCK_POS: ToggleLock(); break;
+                    case HOTKEY_DESTRUCT: SelfDestruct(); break;
+                    case HOTKEY_OPTIONS: ShowOptionsMenu(); break;
                 }
                 handled = true;
             }
             return IntPtr.Zero;
         }
 
-        private void SelfDestruct()
-        {
-            Application.Current.Shutdown();
-        }
+        private void SelfDestruct() => Application.Current.Shutdown();
 
         private void ShowOptionsMenu()
         {
             var optionsWindow = new Window
             {
                 Width = 350,
-                Height = 380,
+                Height = 600, // Slightly taller for status
                 Title = "",
                 WindowStartupLocation = WindowStartupLocation.CenterScreen,
                 Topmost = true,
@@ -253,7 +390,7 @@ namespace SystemHelper
 
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(240, 30, 30, 30)),
+                Background = new SolidColorBrush(Color.FromArgb(245, 30, 30, 30)),
                 CornerRadius = new CornerRadius(12),
                 BorderBrush = new SolidColorBrush(Color.FromArgb(100, 100, 100, 100)),
                 BorderThickness = new Thickness(1)
@@ -261,180 +398,135 @@ namespace SystemHelper
 
             var stack = new StackPanel { Margin = new Thickness(30) };
 
-            var title = new TextBlock
+            // --- HEADER ---
+            stack.Children.Add(new TextBlock
             {
                 Text = "⚙️ Options",
                 FontSize = 22,
                 FontWeight = FontWeights.Bold,
                 Foreground = Brushes.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 25)
-            };
+                Margin = new Thickness(0, 0, 0, 15)
+            });
 
-            var opacityLabel = new TextBlock
+            // Current Active Mode Status
+            var statusText = new TextBlock
             {
-                Text = $"Opacity: {Opacity:F2}",
-                Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
-                Margin = new Thickness(0, 0, 0, 8),
-                FontSize = 14
-            };
-
-            var opacitySlider = new Slider
-            {
-                Minimum = 0.1,
-                Maximum = 1.0,
-                Value = Opacity,
-                TickFrequency = 0.1,
-                IsSnapToTickEnabled = true,
-                Foreground = new SolidColorBrush(Color.FromRgb(100, 100, 100))
-            };
-
-            opacitySlider.ValueChanged += (s, e) =>
-            {
-                Opacity = e.NewValue;
-                savedOpacity = e.NewValue;
-                opacityLabel.Text = $"Opacity: {e.NewValue:F2}";
-            };
-
-            var sizeLabel = new TextBlock
-            {
-                Text = $"Width: {Width:F0}",
-                Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
-                Margin = new Thickness(0, 20, 0, 8),
-                FontSize = 14
-            };
-
-            var sizeSlider = new Slider
-            {
-                Minimum = 100,
-                Maximum = 400,
-                Value = Width,
-                TickFrequency = 10,
-                IsSnapToTickEnabled = true,
-                Foreground = new SolidColorBrush(Color.FromRgb(100, 100, 100))
-            };
-
-            sizeSlider.ValueChanged += (s, e) =>
-            {
-                Width = e.NewValue;
-                savedSize = e.NewValue;
-                ClampPosition();
-                sizeLabel.Text = $"Width: {e.NewValue:F0}";
-            };
-
-            // API Connection toggle
-            var apiConnectionPanel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 20, 0, 0),
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-
-            var apiCheckBox = new CheckBox
-            {
-                IsChecked = isApiConnectionEnabled,
-                VerticalAlignment = VerticalAlignment.Center,
-                Cursor = Cursors.Hand
-            };
-
-            var apiLabel = new TextBlock
-            {
-                Text = "Enable API Connection",
-                Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
-                FontSize = 14,
-                Margin = new Thickness(10, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            apiCheckBox.Checked += (s, e) => isApiConnectionEnabled = true;
-            apiCheckBox.Unchecked += (s, e) =>
-            {
-                isApiConnectionEnabled = false;
-                HideExplanationBox();
-            };
-
-            apiConnectionPanel.Children.Add(apiCheckBox);
-            apiConnectionPanel.Children.Add(apiLabel);
-
-            // Chatbot toggle
-            var chatbotPanel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 12, 0, 0),
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-
-            var chatbotCheckBox = new CheckBox
-            {
-                IsChecked = isChatbotEnabled,
-                VerticalAlignment = VerticalAlignment.Center,
-                Cursor = Cursors.Hand
-            };
-
-            var chatbotLabel = new TextBlock
-            {
-                Text = "Enable AI Explanations",
-                Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
-                FontSize = 14,
-                Margin = new Thickness(10, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            chatbotCheckBox.Checked += (s, e) => isChatbotEnabled = true;
-            chatbotCheckBox.Unchecked += (s, e) =>
-            {
-                isChatbotEnabled = false;
-                HideExplanationBox();
-            };
-
-            chatbotPanel.Children.Add(chatbotCheckBox);
-            chatbotPanel.Children.Add(chatbotLabel);
-
-            var closeButton = new Button
-            {
-                Content = "Close",
-                Margin = new Thickness(0, 25, 0, 0),
-                Padding = new Thickness(40, 10, 40, 10),
-                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
-                Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(100, 100, 100)),
-                BorderThickness = new Thickness(1),
-                FontWeight = FontWeights.Bold,
+                Text = useExternalEngine ? "Active: ♟️ External Engine" : "Active: 🤖 Internal Bot",
+                Foreground = useExternalEngine ? Brushes.LightGreen : Brushes.Cyan,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Cursor = Cursors.Hand
+                FontWeight = FontWeights.Bold,
+                Margin = new Thickness(0, 0, 0, 20)
             };
+            stack.Children.Add(statusText);
 
-            closeButton.MouseEnter += (s, e) => closeButton.Background = new SolidColorBrush(Color.FromRgb(80, 80, 80));
-            closeButton.MouseLeave += (s, e) => closeButton.Background = new SolidColorBrush(Color.FromRgb(60, 60, 60));
-            closeButton.Click += (s, e) => optionsWindow.Close();
+            TextBlock CreateLabel(string text) => new TextBlock { Text = text, Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200)), Margin = new Thickness(0, 15, 0, 5), FontSize = 14 };
 
-            stack.Children.Add(title);
+            // --- SLIDERS ---
+            var opacityLabel = CreateLabel($"Opacity: {Opacity:F2}");
+            var opacitySlider = new Slider { Minimum = 0.1, Maximum = 1.0, Value = Opacity, TickFrequency = 0.1, IsSnapToTickEnabled = true };
+            opacitySlider.ValueChanged += (s, e) => { Opacity = e.NewValue; savedOpacity = e.NewValue; opacityLabel.Text = $"Opacity: {e.NewValue:F2}"; };
             stack.Children.Add(opacityLabel);
             stack.Children.Add(opacitySlider);
+
+            var sizeLabel = CreateLabel($"Size: {Width:F0}");
+            var sizeSlider = new Slider { Minimum = 100, Maximum = 400, Value = Width, TickFrequency = 10, IsSnapToTickEnabled = true };
+            sizeSlider.ValueChanged += (s, e) => { Width = e.NewValue; savedSize = e.NewValue; ClampPosition(); sizeLabel.Text = $"Size: {e.NewValue:F0}"; };
             stack.Children.Add(sizeLabel);
             stack.Children.Add(sizeSlider);
-            stack.Children.Add(apiConnectionPanel);
-            stack.Children.Add(chatbotPanel);
+
+            // --- ENGINE SETTINGS ---
+            stack.Children.Add(new TextBlock { Text = "♟️ Engine Settings", FontWeight = FontWeights.Bold, Foreground = Brushes.White, Margin = new Thickness(0, 20, 0, 5) });
+
+            var engineCheck = new CheckBox
+            {
+                IsChecked = useExternalEngine,
+                Content = "Use External Engine",
+                Foreground = Brushes.LightGray,
+                Margin = new Thickness(0, 5, 0, 5),
+                Cursor = Cursors.Hand
+            };
+
+            engineCheck.Checked += (s, e) =>
+            {
+                useExternalEngine = true;
+                statusText.Text = "Active: ♟️ External Engine";
+                statusText.Foreground = Brushes.LightGreen;
+                InitializeExternalEngine();
+            };
+
+            engineCheck.Unchecked += (s, e) =>
+            {
+                useExternalEngine = false;
+                statusText.Text = "Active: 🤖 Internal Bot";
+                statusText.Foreground = Brushes.Cyan;
+                // Safe stop in background to prevent UI freeze/crash
+                Task.Run(() => StopExternalEngine());
+            };
+            stack.Children.Add(engineCheck);
+
+            // Path Selection
+            var pathPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0) };
+            var pathBox = new TextBox { Text = externalEnginePath, Width = 200, Height = 25, VerticalContentAlignment = VerticalAlignment.Center, Background = new SolidColorBrush(Color.FromRgb(50, 50, 50)), Foreground = Brushes.White, BorderThickness = new Thickness(0) };
+            var browseBtn = new Button { Content = "...", Width = 30, Height = 25, Margin = new Thickness(5, 0, 0, 0), Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)), Foreground = Brushes.White, Cursor = Cursors.Hand };
+
+            browseBtn.Click += (s, e) => {
+                var dlg = new OpenFileDialog { Filter = "Executables (*.exe)|*.exe" };
+                if (dlg.ShowDialog() == true)
+                {
+                    externalEnginePath = dlg.FileName;
+                    pathBox.Text = externalEnginePath;
+                    // If enabled, restart with new path
+                    if (useExternalEngine) InitializeExternalEngine();
+                }
+            };
+            pathPanel.Children.Add(pathBox);
+            pathPanel.Children.Add(browseBtn);
+            stack.Children.Add(pathPanel);
+
+            // Command Input
+            stack.Children.Add(CreateLabel("Command (e.g. 'go nodes 1')"));
+            var cmdBox = new TextBox { Text = externalEngineCommand, Height = 25, VerticalContentAlignment = VerticalAlignment.Center, Background = new SolidColorBrush(Color.FromRgb(50, 50, 50)), Foreground = Brushes.White, BorderThickness = new Thickness(0) };
+            cmdBox.TextChanged += (s, e) => externalEngineCommand = cmdBox.Text;
+            stack.Children.Add(cmdBox);
+
+            // Bot Depth
+            var depthLabel = CreateLabel($"Internal Bot Depth: {currentBotDepth}");
+            var depthSlider = new Slider { Minimum = 4, Maximum = 14, Value = currentBotDepth, TickFrequency = 1, IsSnapToTickEnabled = true };
+            depthSlider.ValueChanged += (s, e) => {
+                currentBotDepth = (int)e.NewValue;
+                depthLabel.Text = $"Internal Bot Depth: {currentBotDepth}";
+                if (bot != null) bot.SetMaxDepth(currentBotDepth);
+            };
+            stack.Children.Add(depthLabel);
+            stack.Children.Add(depthSlider);
+
+            // Close Button
+            var closeButton = new Button
+            {
+                Content = "Save & Close",
+                Margin = new Thickness(0, 20, 0, 0),
+                Padding = new Thickness(20, 8, 20, 8),
+                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.Bold,
+                Cursor = Cursors.Hand
+            };
+            closeButton.Click += (s, e) => { SaveSettings(); optionsWindow.Close(); };
             stack.Children.Add(closeButton);
 
             border.Child = stack;
             optionsWindow.Content = border;
             optionsWindow.ShowDialog();
+
+            SaveSettings();
         }
 
         private void ToggleLock()
         {
             isLocked = !isLocked;
-            if (isLocked)
-            {
-                UnregisterArrowHotkeys();
-                EnableClickThrough();
-            }
-            else
-            {
-                RegisterArrowHotkeys();
-                EnableClickThrough();
-            }
+            if (isLocked) { UnregisterArrowHotkeys(); EnableClickThrough(); }
+            else { RegisterArrowHotkeys(); EnableClickThrough(); }
         }
 
         private void FlipBoard()
@@ -445,22 +537,14 @@ namespace SystemHelper
 
         private void ToggleVisibility()
         {
-            if (Visibility == Visibility.Visible)
-            {
-                Visibility = Visibility.Hidden;
-            }
-            else
-            {
-                Visibility = Visibility.Visible;
-                Activate();
-            }
+            if (Visibility == Visibility.Visible) Visibility = Visibility.Hidden;
+            else { Visibility = Visibility.Visible; Activate(); }
         }
 
         private void EnableClickThrough()
         {
             var exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
-            var layeredExStyle = exStyle | WS_EX_LAYERED;
-            SetWindowLong(_hwnd, GWL_EXSTYLE, layeredExStyle | WS_EX_TRANSPARENT);
+            SetWindowLong(_hwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED | WS_EX_TRANSPARENT);
             _isClickThrough = true;
         }
 
@@ -473,11 +557,7 @@ namespace SystemHelper
 
         private void MainWindow_KeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key == Key.F)
-            {
-                FlipBoard();
-                e.Handled = true;
-            }
+            if (e.Key == Key.F) { FlipBoard(); e.Handled = true; }
         }
 
         private void InitializeChessBoard()
@@ -499,7 +579,6 @@ namespace SystemHelper
                             ? new SolidColorBrush(Color.FromRgb(240, 217, 181))
                             : new SolidColorBrush(Color.FromRgb(181, 136, 99))
                     };
-
                     var textBlock = new TextBlock
                     {
                         FontSize = 48,
@@ -507,7 +586,6 @@ namespace SystemHelper
                         VerticalAlignment = VerticalAlignment.Center,
                         Foreground = Brushes.Black
                     };
-
                     square.Child = textBlock;
                     Grid.SetRow(square, row);
                     Grid.SetColumn(square, col);
@@ -524,6 +602,7 @@ namespace SystemHelper
             string[] fenParts = fen.Split(' ');
             string position = fenParts[0];
             string[] ranks = position.Split('/');
+
             var piecePositions = new List<(int row, int col, string piece)>();
             var highlights = new List<(int row, int col)>();
 
@@ -532,14 +611,10 @@ namespace SystemHelper
                 int file = 0;
                 foreach (char c in ranks[rank])
                 {
-                    if (char.IsDigit(c))
-                    {
-                        file += c - '0';
-                    }
+                    if (char.IsDigit(c)) file += c - '0';
                     else
                     {
-                        string pieceKey = char.IsUpper(c) ? "w" : "b";
-                        pieceKey += char.ToUpper(c);
+                        string pieceKey = (char.IsUpper(c) ? "w" : "b") + char.ToUpper(c);
                         if (pieceUnicode.ContainsKey(pieceKey))
                         {
                             var (displayRow, displayCol) = GetDisplayCoords(rank, file);
@@ -570,26 +645,15 @@ namespace SystemHelper
                         square.Background = (row + col) % 2 == 0
                             ? new SolidColorBrush(Color.FromRgb(240, 217, 181))
                             : new SolidColorBrush(Color.FromRgb(181, 136, 99));
-                        if (square.Child is TextBlock tb)
-                        {
-                            tb.Text = "";
-                        }
+                        if (square.Child is TextBlock tb) tb.Text = "";
                     }
                 }
-
                 foreach (var (row, col, piece) in piecePositions)
                 {
-                    if (squareCache[row, col].Child is TextBlock tb)
-                    {
-                        tb.Text = piece;
-                    }
+                    if (squareCache[row, col].Child is TextBlock tb) tb.Text = piece;
                 }
-
                 var highlightBrush = new SolidColorBrush(Color.FromRgb(255, 255, 100));
-                foreach (var (row, col) in highlights)
-                {
-                    squareCache[row, col].Background = highlightBrush;
-                }
+                foreach (var (row, col) in highlights) squareCache[row, col].Background = highlightBrush;
             });
         }
 
@@ -605,10 +669,7 @@ namespace SystemHelper
 
         private void HideExplanationBox()
         {
-            Dispatcher.Invoke(() =>
-            {
-                ExplanationBorder.Visibility = Visibility.Collapsed;
-            });
+            Dispatcher.Invoke(() => ExplanationBorder.Visibility = Visibility.Collapsed);
         }
 
         private (int row, int col) GetDisplayCoords(int rank, int file)
@@ -625,241 +686,157 @@ namespace SystemHelper
             return GetDisplayCoords(rank, file);
         }
 
+        // --- LISTENER & GAME LOOP ---
+        // --- UPDATED LISTENER LOOP (Crash Fix) ---
         async Task RunListener()
         {
             HttpListener listener = new HttpListener();
             listener.Prefixes.Add("http://localhost:30012/");
-            try
-            {
-                listener.Start();
-                Debug.WriteLine("Bot listener started on http://localhost:30012/");
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Failed to start listener: {ex.Message}");
-                return;
-            }
-
-            int requestCount = 0;
+            try { listener.Start(); } catch { return; }
 
             while (true)
             {
                 try
                 {
                     var ctx = await listener.GetContextAsync();
-                    requestCount++;
-
-                    if (ctx.Request.HttpMethod == "OPTIONS")
-                    {
-                        ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
-                        ctx.Response.AddHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-                        ctx.Response.AddHeader("Access-Control-Allow-Headers", "Content-Type");
-                        ctx.Response.StatusCode = 200;
-                        ctx.Response.OutputStream.Close();
-                        continue;
-                    }
+                    if (ctx.Request.HttpMethod == "OPTIONS") { Respond(ctx, 200); continue; }
 
                     if (ctx.Request.HttpMethod == HttpMethod.Post.Method)
                     {
-                        ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
-
-                        // Check if API connection is disabled
-                        if (!isApiConnectionEnabled)
-                        {
-                            Debug.WriteLine("⚠️ API connection disabled - ignoring request");
-                            ctx.Response.StatusCode = 200;
-                            ctx.Response.OutputStream.Close();
-                            continue;
-                        }
+                        if (!isApiConnectionEnabled) { Respond(ctx, 200); continue; }
 
                         string requestBody;
-                        using (var sr = new StreamReader(ctx.Request.InputStream))
-                        {
-                            requestBody = await sr.ReadToEndAsync();
-                        }
+                        using (var sr = new StreamReader(ctx.Request.InputStream)) requestBody = await sr.ReadToEndAsync();
 
                         JsonElement jss;
-                        try
-                        {
-                            jss = JsonSerializer.Deserialize<JsonElement>(requestBody);
-                        }
-                        catch
-                        {
-                            ctx.Response.StatusCode = 400;
-                            ctx.Response.OutputStream.Close();
-                            continue;
-                        }
+                        try { jss = JsonSerializer.Deserialize<JsonElement>(requestBody); } catch { Respond(ctx, 400); continue; }
 
                         try
                         {
                             var position = jss.GetProperty("position").GetString()!;
-                            if (position == lastPgn)
-                            {
-                                ctx.Response.StatusCode = 200;
-                                ctx.Response.OutputStream.Close();
-                                continue;
-                            }
+                            if (position == lastPgn) { Respond(ctx, 200); continue; }
 
                             lastPgn = position;
                             string fen = ConvertPgnToFen(position);
 
+                            while (bot == null) await Task.Delay(100);
+
+                            string bestMoveUCI = "";
+                            double thinkTime = 0;
+                            ChessChallenge.API.Move apiMove = ChessChallenge.API.Move.NullMove;
                             var apiBoard = ChessChallenge.API.Board.CreateBoardFromFEN(fen);
-                            var timer = new ChessChallenge.API.Timer(10000, 10000, 1000, 0);
 
-                            Debug.WriteLine($"\n╔═══════════════════════════════════════════════════════════╗");
-                            Debug.WriteLine($"║ 🎯 MOVE #{requestCount}");
-                            Debug.WriteLine($"╚═══════════════════════════════════════════════════════════╝");
-                            Debug.WriteLine($"Position: {fen}");
-                            Debug.WriteLine($"Turn: {(apiBoard.IsWhiteToMove ? "White" : "Black")}\n");
-
-                            // Calculate eval BEFORE our move (this is AFTER opponent's move)
-                            double evalAfterOpponent = EvaluatePositionScore(apiBoard);
-
-                            // Calculate opponent's move quality
-                            double opponentMoveSwing = 0.0;
-                            bool opponentBlundered = false;
-
-                            if (!string.IsNullOrEmpty(lastFenBeforeOpponent))
-                            {
-                                opponentMoveSwing = evalAfterOpponent - evalBeforeOpponentMove;
-                                opponentBlundered = opponentMoveSwing > 1.0;
-
-                                Debug.WriteLine($"Eval before opponent: {evalBeforeOpponentMove:+0.00;-0.00}");
-                                Debug.WriteLine($"Eval after opponent: {evalAfterOpponent:+0.00;-0.00}");
-                                Debug.WriteLine($"Opponent move quality: {opponentMoveSwing:+0.00;-0.00}");
-                                if (opponentBlundered)
-                                {
-                                    Debug.WriteLine($"⚠️ OPPONENT BLUNDERED! (+{opponentMoveSwing:F2})");
-                                }
-                            }
-
-                            // Let bot think
                             var startTime = DateTime.Now;
-                            var move = bot.Think(apiBoard, timer);
-                            var thinkTime = (DateTime.Now - startTime).TotalMilliseconds;
 
-                            if (move.IsNull)
+                            // --- CRASH FIX: Check for engine running AND usage flag ---
+                            if (useExternalEngine)
                             {
-                                Debug.WriteLine("⚠️ No legal moves (checkmate or stalemate)\n");
-                                UpdateChessBoard(fen, "");
-                                HideExplanationBox();
-                                ctx.Response.StatusCode = 200;
-                                ctx.Response.OutputStream.Close();
-                                continue;
-                            }
+                                // If engine died or isn't running, try to start it
+                                if (!_isEngineRunning) InitializeExternalEngine();
 
-                            // Get move UCI
-                            string bestMoveUCI = $"{move.StartSquare.Name}{move.TargetSquare.Name}";
-                            if (move.IsPromotion)
-                            {
-                                bestMoveUCI += move.PromotionPieceType.ToString()[0].ToString().ToLower();
-                            }
-
-                            Debug.WriteLine($"✅ CHOSEN MOVE: {bestMoveUCI}");
-                            Debug.WriteLine($"   Think time: {thinkTime:F0}ms");
-                            if (move.IsCastles) Debug.WriteLine("   ♚ Castling move");
-                            if (move.IsCapture) Debug.WriteLine($"   ⚔️ Captures {move.CapturePieceType}");
-                            if (move.IsPromotion) Debug.WriteLine($"   👑 Promotes to {move.PromotionPieceType}");
-                            Debug.WriteLine("");
-
-                            // Build move info string
-                            string moveInfo = $"Move: {bestMoveUCI} | {thinkTime:F0}ms";
-                            if (move.IsCastles) moveInfo += " | ♚";
-                            if (move.IsCapture) moveInfo += $" | ⚔️{move.CapturePieceType}";
-
-                            // === AI EXPLANATION (only if both API and chatbot enabled) ===
-                            if (isApiConnectionEnabled && isChatbotEnabled)
-                            {
-                                Debug.WriteLine("🤖 AI EXPLANATION:");
-                                Debug.WriteLine("─────────────────────────────────────────────────────────");
-
-                                try
+                                // If STILL not running (bad path?), fallback to internal bot
+                                if (_isEngineRunning)
                                 {
-                                    string explanation;
-
-                                    if (opponentBlundered)
+                                    bestMoveUCI = GetBestMoveFromExternalEngine(fen);
+                                    if (!string.IsNullOrEmpty(bestMoveUCI))
                                     {
-                                        explanation = await groqHelper.ExplainBlunderAsync(
-                                            apiBoard,
-                                            move,
-                                            bestMoveUCI,
-                                            opponentMoveSwing
-                                        );
-
-                                        moveInfo = $"🚨 BLUNDER! +{opponentMoveSwing:F1} | {moveInfo}";
+                                        // Convert UCI string back to API Move
+                                        int fromIndex = SquareHelper.SquareTextToIndex(bestMoveUCI.Substring(0, 2));
+                                        int toIndex = SquareHelper.SquareTextToIndex(bestMoveUCI.Substring(2, 2));
+                                        apiMove = new ChessChallenge.API.Move(bestMoveUCI, apiBoard);
                                     }
-                                    else
-                                    {
-                                        explanation = await groqHelper.ExplainMoveShortAsync(
-                                            apiBoard,
-                                            move,
-                                            bestMoveUCI
-                                        );
-                                    }
-
-                                    Debug.WriteLine(explanation);
-
-                                    // Update GUI
-                                    UpdateExplanationBox(moveInfo, explanation);
                                 }
-                                catch (Exception aiEx)
+                                else
                                 {
-                                    Debug.WriteLine($"⚠️ AI error: {aiEx.Message}");
-                                    if (opponentBlundered)
-                                    {
-                                        UpdateExplanationBox(moveInfo, $"Opponent blundered! Capitalize on +{opponentMoveSwing:F1} advantage.");
-                                    }
-                                    else
-                                    {
-                                        UpdateExplanationBox(moveInfo, "Move executed.");
-                                    }
+                                    // Fallback logic
+                                    Debug.WriteLine("⚠️ Engine failed, using internal bot fallback.");
+                                    var timer = new ChessChallenge.API.Timer(10000, 10000, 1000, 0);
+                                    apiMove = bot.Think(apiBoard, timer);
+                                    if (!apiMove.IsNull) bestMoveUCI = FormatMove(apiMove);
                                 }
                             }
                             else
                             {
-                                // Show basic info without AI explanation
-                                if (isChatbotEnabled)
-                                {
-                                    string basicInfo = opponentBlundered
-                                        ? $"Opponent made a mistake! Take advantage of the position."
-                                        : "Move executed successfully.";
-                                    UpdateExplanationBox(moveInfo, basicInfo);
-                                }
-                                else
-                                {
-                                    HideExplanationBox();
-                                }
-
-                                Debug.WriteLine(isApiConnectionEnabled
-                                    ? "AI explanations disabled in settings."
-                                    : "API connection disabled in settings.");
+                                // Use internal bot
+                                var timer = new ChessChallenge.API.Timer(10000, 10000, 1000, 0);
+                                apiMove = bot.Think(apiBoard, timer);
+                                if (!apiMove.IsNull) bestMoveUCI = FormatMove(apiMove);
                             }
 
-                            Debug.WriteLine("═══════════════════════════════════════════════════════════\n");
+                            thinkTime = (DateTime.Now - startTime).TotalMilliseconds;
+
+                            if (string.IsNullOrEmpty(bestMoveUCI))
+                            {
+                                UpdateChessBoard(fen, "");
+                                Respond(ctx, 200);
+                                continue;
+                            }
 
                             UpdateChessBoard(fen, bestMoveUCI);
 
-                            // Store eval AFTER our move for next comparison
-                            var boardAfterOurMove = ChessChallenge.API.Board.CreateBoardFromFEN(fen);
-                            boardAfterOurMove.MakeMove(move);
-                            evalBeforeOpponentMove = EvaluatePositionScore(boardAfterOurMove);
-                            lastFenBeforeOpponent = boardAfterOurMove.GetFenString();
-                        }
-                        catch (Exception ex)
-                        {
-                            Debug.WriteLine($"❌ Error: {ex.Message}");
-                            Debug.WriteLine($"Stack: {ex.StackTrace}");
-                        }
+                            if (isChatbotEnabled && groqHelper != null && !apiMove.IsNull)
+                            {
+                                _ = Task.Run(() => ProcessAiExplanation(apiBoard, apiMove, bestMoveUCI, thinkTime));
+                            }
+                            else HideExplanationBox();
 
-                        ctx.Response.StatusCode = 200;
-                        ctx.Response.OutputStream.Close();
+                            if (!apiMove.IsNull)
+                            {
+                                var boardAfterOurMove = ChessChallenge.API.Board.CreateBoardFromFEN(fen);
+                                boardAfterOurMove.MakeMove(apiMove);
+                                evalBeforeOpponentMove = EvaluatePositionScore(boardAfterOurMove);
+                                lastFenBeforeOpponent = boardAfterOurMove.GetFenString();
+                            }
+                        }
+                        catch (Exception ex) { Debug.WriteLine("Loop Error: " + ex.Message); }
+                        Respond(ctx, 200);
                     }
                 }
-                catch (Exception ex)
-                {
-                    if (!listener.IsListening) break;
-                }
+                catch { if (!listener.IsListening) break; }
             }
+        }
+        private void Respond(HttpListenerContext ctx, int statusCode)
+        {
+            ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
+            ctx.Response.AddHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+            ctx.Response.StatusCode = statusCode;
+            ctx.Response.OutputStream.Close();
+        }
+
+        private string FormatMove(ChessChallenge.API.Move move)
+        {
+            string uci = $"{move.StartSquare.Name}{move.TargetSquare.Name}";
+            if (move.IsPromotion) uci += move.PromotionPieceType.ToString()[0].ToString().ToLower();
+            return uci;
+        }
+
+        private async Task ProcessAiExplanation(ChessChallenge.API.Board apiBoard, ChessChallenge.API.Move move, string bestMoveUCI, double thinkTime)
+        {
+            double evalAfterOpponent = EvaluatePositionScore(apiBoard);
+            double opponentMoveSwing = 0.0;
+            bool opponentBlundered = false;
+
+            if (!string.IsNullOrEmpty(lastFenBeforeOpponent))
+            {
+                opponentMoveSwing = evalAfterOpponent - evalBeforeOpponentMove;
+                opponentBlundered = opponentMoveSwing > 1.0;
+            }
+
+            string moveInfo = $"Move: {bestMoveUCI} | {thinkTime:F0}ms";
+            if (move.IsCastles) moveInfo += " | ♚";
+            if (move.IsCapture) moveInfo += $" | ⚔️";
+            if (opponentBlundered) moveInfo = $"🚨 BLUNDER! +{opponentMoveSwing:F1} | {moveInfo}";
+
+            try
+            {
+                string explanation;
+                if (opponentBlundered)
+                    explanation = await groqHelper!.ExplainBlunderAsync(apiBoard, move, bestMoveUCI, opponentMoveSwing);
+                else
+                    explanation = await groqHelper!.ExplainMoveShortAsync(apiBoard, move, bestMoveUCI);
+                UpdateExplanationBox(moveInfo, explanation);
+            }
+            catch { UpdateExplanationBox(moveInfo, "Move executed."); }
         }
 
         private double EvaluatePositionScore(ChessChallenge.API.Board board)
@@ -867,14 +844,10 @@ namespace SystemHelper
             int score = 0;
             var pieceValues = new Dictionary<ChessChallenge.API.PieceType, int>
             {
-                { ChessChallenge.API.PieceType.Pawn, 100 },
-                { ChessChallenge.API.PieceType.Knight, 300 },
-                { ChessChallenge.API.PieceType.Bishop, 300 },
-                { ChessChallenge.API.PieceType.Rook, 500 },
-                { ChessChallenge.API.PieceType.Queen, 900 },
-                { ChessChallenge.API.PieceType.King, 0 }
+                { ChessChallenge.API.PieceType.Pawn, 100 }, { ChessChallenge.API.PieceType.Knight, 300 },
+                { ChessChallenge.API.PieceType.Bishop, 300 }, { ChessChallenge.API.PieceType.Rook, 500 },
+                { ChessChallenge.API.PieceType.Queen, 900 }, { ChessChallenge.API.PieceType.King, 0 }
             };
-
             for (int i = 0; i < 64; i++)
             {
                 var piece = board.GetPiece(new ChessChallenge.API.Square(i));
@@ -884,7 +857,6 @@ namespace SystemHelper
                     score += piece.IsWhite ? value : -value;
                 }
             }
-
             return board.IsWhiteToMove ? score / 100.0 : -score / 100.0;
         }
 
@@ -898,7 +870,6 @@ namespace SystemHelper
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 movesText += " " + line.Trim();
             }
-
             movesText = Regex.Replace(movesText, @"\d+\.", " ");
             movesText = Regex.Replace(movesText, @"[+#]", "");
             movesText = Regex.Replace(movesText, @"\s*(1-0|0-1|1/2-1/2|\*)\s*$", "");
@@ -908,7 +879,6 @@ namespace SystemHelper
 
             var board = new Board();
             board.LoadPosition(FenUtility.StartPositionFEN);
-
             if (!string.IsNullOrWhiteSpace(movesText))
             {
                 var moves = movesText.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
@@ -929,6 +899,17 @@ namespace SystemHelper
                 }
             }
             return FenUtility.CurrentFen(board);
+        }
+    }
+
+    // Helper for converting Square Names to Index if missing
+    public static class SquareHelper
+    {
+        public static int SquareTextToIndex(string square)
+        {
+            int file = square[0] - 'a';
+            int rank = square[1] - '1';
+            return rank * 8 + file;
         }
     }
 }
