@@ -40,6 +40,7 @@ namespace SystemHelper
     {
         private MyBot bot;
         private GroqAIHelper? groqHelper;
+        private OpeningBook openingBook;
         private bool isFlipped = false;
         private string currentFen = FenUtility.StartPositionFEN;
         private string currentBestMove = "";
@@ -156,6 +157,7 @@ namespace SystemHelper
                 {
                     bot = new MyBot();
                     bot.SetMaxDepth(currentBotDepth);
+                    openingBook = new OpeningBook(); // <--- ADD THIS
                     try { groqHelper = new GroqAIHelper(); } catch { }
 
                     if (useExternalEngine) InitializeExternalEngine();
@@ -163,6 +165,7 @@ namespace SystemHelper
                     Debug.WriteLine($"✅ Startup complete. Engine Enabled: {useExternalEngine}");
                 });
             };
+
 
             Closing += (s, e) =>
             {
@@ -728,39 +731,48 @@ namespace SystemHelper
 
                             var startTime = DateTime.Now;
 
-                            // --- CRASH FIX: Check for engine running AND usage flag ---
-                            if (useExternalEngine)
-                            {
-                                // If engine died or isn't running, try to start it
-                                if (!_isEngineRunning) InitializeExternalEngine();
+                            // --- 1. CHECK OPENING BOOK FIRST ---
+                            // Only use book if we are not analyzing a blunder (optional, but standard behavior)
+                            bool foundInBook = openingBook.TryGetBookMove(apiBoard, out string bookMoveStr);
 
-                                // If STILL not running (bad path?), fallback to internal bot
-                                if (_isEngineRunning)
+                            if (foundInBook)
+                            {
+                                bestMoveUCI = bookMoveStr;
+                                // Create the API move object for the book move so we can use it for updates/explanation
+                                // Note: Book moves in dictionary should be "e2e4", "g8f6" format.
+                                apiMove = new ChessChallenge.API.Move(bestMoveUCI, apiBoard);
+                                Debug.WriteLine($"📖 Book Move Played: {bestMoveUCI}");
+                            }
+                            else
+                            {
+                                // --- 2. IF NO BOOK MOVE, USE ENGINE ---
+                                if (useExternalEngine)
                                 {
-                                    bestMoveUCI = GetBestMoveFromExternalEngine(fen);
-                                    if (!string.IsNullOrEmpty(bestMoveUCI))
+                                    // ... Your existing External Engine Logic ...
+                                    if (!_isEngineRunning) InitializeExternalEngine();
+
+                                    if (_isEngineRunning)
                                     {
-                                        // Convert UCI string back to API Move
-                                        int fromIndex = SquareHelper.SquareTextToIndex(bestMoveUCI.Substring(0, 2));
-                                        int toIndex = SquareHelper.SquareTextToIndex(bestMoveUCI.Substring(2, 2));
-                                        apiMove = new ChessChallenge.API.Move(bestMoveUCI, apiBoard);
+                                        bestMoveUCI = GetBestMoveFromExternalEngine(fen);
+                                        if (!string.IsNullOrEmpty(bestMoveUCI))
+                                        {
+                                            apiMove = new ChessChallenge.API.Move(bestMoveUCI, apiBoard);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        var timer = new ChessChallenge.API.Timer(10000, 10000, 1000, 0);
+                                        apiMove = bot.Think(apiBoard, timer);
+                                        if (!apiMove.IsNull) bestMoveUCI = FormatMove(apiMove);
                                     }
                                 }
                                 else
                                 {
-                                    // Fallback logic
-                                    Debug.WriteLine("⚠️ Engine failed, using internal bot fallback.");
+                                    // Use internal bot
                                     var timer = new ChessChallenge.API.Timer(10000, 10000, 1000, 0);
                                     apiMove = bot.Think(apiBoard, timer);
                                     if (!apiMove.IsNull) bestMoveUCI = FormatMove(apiMove);
                                 }
-                            }
-                            else
-                            {
-                                // Use internal bot
-                                var timer = new ChessChallenge.API.Timer(10000, 10000, 1000, 0);
-                                apiMove = bot.Think(apiBoard, timer);
-                                if (!apiMove.IsNull) bestMoveUCI = FormatMove(apiMove);
                             }
 
                             thinkTime = (DateTime.Now - startTime).TotalMilliseconds;
