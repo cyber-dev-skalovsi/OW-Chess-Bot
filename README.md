@@ -1,9 +1,9 @@
-# Cheatmate - Hidden Chess Assistant with AI Analysis
+# ChessMentor - AI-Powered Chess Training & Analysis Desktop App
 
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/cyber-dev-skalovsi/SchachAnalyseGUI)  
 [![Language](https://img.shields.io/badge/language-C%23-blue)](https://docs.microsoft.com/en-us/dotnet/csharp/)
 
-A sophisticated chess analysis overlay with AI-powered explanations, real-time blunder detection, and complete stealth capabilities. Built for tournament preparation, training analysis, and position evaluation with natural language insights.
+Chess training application with AI-powered move explanations, real-time position analysis, and educational insights. Built for chess students, coaches, and enthusiasts who want to understand chess positions deeply through natural language explanations.
 
 <img width="431" height="477" alt="image" src="https://github.com/user-attachments/assets/5dd8889b-a56c-424a-9bc2-18c7dde35917" />
 <img width="239" height="459" alt="image" src="https://github.com/user-attachments/assets/717dd21d-b507-4ae2-8261-3da8da9a3256" />
@@ -11,91 +11,89 @@ A sophisticated chess analysis overlay with AI-powered explanations, real-time b
 
 ## Core Features
 
-### Real-Time AI Analysis
-- **Natural Language Explanations**: Groq-powered AI explains every move in 2-3 concise sentences
-- **Blunder Detection**: Automatic detection when opponent's moves swing evaluation by +1.0 or more
-- **Strategic Insights**: Explains what the move accomplishes, follow-up plans, and tactical threats
-- **Contextual Analysis**: Differentiates between normal moves, captures, castling, and promotions
+### AI-Powered Learning
+- **Natural Language Explanations**: Groq-powered AI explains every move in clear, educational language
+- **Mistake Analysis**: Automatic detection of tactical and positional errors with detailed breakdowns
+- **Strategic Insights**: Learn what moves accomplish, including follow-up plans and tactical patterns
+- **Contextual Teaching**: Different explanations for captures, positional moves, castling, and promotions
 
-### Intelligent Position Evaluation
-- **Evaluation Tracking**: Monitors position scores before and after each move
-- **Opponent Move Quality**: Compares positions to identify mistakes and opportunities
-- **Material-Based Scoring**: Real-time evaluation using piece values and positional factors
-- **Blunder Alerts**: Visual warnings with advantage calculations when opponent makes critical errors
+### Position Analysis Engine
+- **Custom Chess Engine**: Built-in minimax algorithm with alpha-beta pruning for move suggestions
+- **Evaluation Tracking**: Monitors position scores to help understand advantage shifts
+- **Move Comparison**: Analyzes the difference between played moves and engine recommendations
+- **Material & Positional Assessment**: Real-time evaluation based on piece values and board control
 
-### Advanced Overlay System
-- **Semi-Transparent Display**: Adjustable opacity (0.1-1.0) for minimal screen obstruction
-- **Auto-Expanding Panel**: Explanation box grows with content, no scrolling needed
-- **Move Highlighting**: Yellow squares mark the suggested move's origin and destination
-- **Resizable Interface**: Width adjustment from 100-400px to fit any screen layout
+### Interactive Training Interface
+- **Visual Board Display**: Clear chessboard visualization with Unicode pieces
+- **Move Highlighting**: Yellow squares show suggested moves for easy visualization
+- **Adjustable Display**: Customizable window size and transparency to fit your workflow
+- **Board Orientation**: Switch between white and black perspective
 
-### Stealth Capabilities
-- **Process Masking**: Runs as `svchost.exe` to avoid detection in Task Manager
-- **Click-Through Mode**: Overlay doesn't interfere with underlying applications
-- **Global Hotkeys**: Control without bringing window to foreground
-- **Minimal Footprint**: Lightweight HTTP server on localhost:30012
+### Study Tools
+- **PGN Import**: Load games via HTTP endpoint or direct input
+- **Position Setup**: Analyze any position using standard PGN notation
+- **Evaluation Breakdown**: Detailed scoring components for educational purposes
+- **Export Functionality**: Save analysis for review and study
 
-### Configuration Options
-- **API Connection Toggle**: Enable/disable bot analysis without closing application
-- **AI Explanations Toggle**: Keep bot running but disable expensive API calls
-- **Opacity Control**: Fine-tune transparency for your environment
-- **Width Adjustment**: Customize overlay size for optimal viewing
-- **Position Locking**: Prevent accidental movement during critical games
+## Educational Use Cases
+
+- **Post-Game Analysis**: Review your completed games and understand mistakes
+- **Opening Study**: Explore opening variations with AI explanations
+- **Tactical Training**: Practice finding the best moves in tactical positions
+- **Chess Coaching**: Use as a teaching tool to explain positions to students
+- **Position Understanding**: Learn strategic concepts through detailed explanations
 
 ## How It Works
 
-1. **Position Input**: Sends PGN via HTTP POST to `localhost:30012`
-2. **FEN Conversion**: Converts PGN notation to FEN for engine processing
-3. **Bot Analysis**: Custom minimax algorithm evaluates position and suggests best move
-4. **Evaluation Comparison**: Tracks score changes to detect blunders
-5. **AI Explanation**: Groq API generates natural language analysis (if enabled)
-6. **Visual Display**: Updates chessboard with highlighted move and explanation text
+1. **Import Position**: Send PGN notation via HTTP POST to `localhost:30012`
+2. **Engine Analysis**: Custom chess engine evaluates position and suggests optimal moves
+3. **Evaluation Assessment**: Calculates position score and identifies tactical opportunities
+4. **AI Explanation**: Groq API generates educational explanations in plain language
+5. **Visual Feedback**: Displays analysis on interactive chessboard with highlighted suggestions
 
 ## Setup Instructions
 
 ### Prerequisites
 - .NET Framework 4.8 or higher
 - Windows 10/11
-- Admin privileges (for global hotkeys and stealth features)
-- Groq API key (optional, for AI explanations)
+- Groq API key (optional, for AI explanations - free tier available)
 
 ### Installation
 
 1. **Clone Repository:**
-   ```
-   git clone https://github.com/cyber-dev-skalovsi/Cheatmate.git
+   ```bash
+   git clone https://github.com/cyber-dev-skalovsi/SchachAnalyseGUI.git
    cd SchachAnalyseGUI
    ```
 
-2. **Configure API Key** (Optional):
+2. **Configure API Key** (Optional for AI features):
    - Open `GroqAIHelper.cs`
-   - Replace API key in `GROQ_API_KEY` field
-   - Or disable AI explanations in options menu
-   (only if you want your own kind of AI model to be used)
+   - Add your Groq API key in the `GROQ_API_KEY` field
+   - Get free API key at: https://console.groq.com
+   - Engine analysis works without API key
 
 3. **Build Project:**
-   ```
+   ```bash
    dotnet build -c Release
    ```
 
 4. **Launch Application:**
-   ```
+   ```bash
    cd bin/Release
-   ./Cheatmate.exe
+   ./ChessMentor.exe
    ```
 
 ### Usage
 
-**Hotkeys:**
-- `Ctrl+Shift+H`: Toggle overlay visibility
+**Keyboard Shortcuts:**
+- `Ctrl+Shift+H`: Show/hide analysis window
 - `Ctrl+Shift+F`: Flip board orientation
-- `Ctrl+Shift+L`: Lock/unlock position
-- `Ctrl+Shift+O`: Open options menu
-- `Ctrl+Shift+X`: Close application
-- `Arrow Keys`: Reposition overlay (when unlocked)
+- `Ctrl+Shift+O`: Open settings menu
+- `Ctrl+Shift+X`: Exit application
+- `Arrow Keys`: Reposition window
 
-**API Endpoint:**
-```
+**Import Position via API:**
+```http
 POST http://localhost:30012/
 Content-Type: application/json
 
@@ -105,23 +103,23 @@ Content-Type: application/json
 ```
 
 **Example Request:**
-```
+```bash
 curl -X POST http://localhost:30012/ \
   -H "Content-Type: application/json" \
-  -d '{"position": "1. e4 e5 2. Nf3 Nc6"}'
+  -d '{"position": "1. e4 e5 2. Nf3 Nc6 3. Bb5"}'
 ```
 
 ## Project Structure
 
 ```
-Cheatmate/
+ChessMentor/
 ├── MainWindow.xaml           # GUI layout and styling
 ├── MainWindow.xaml.cs         # Main application logic and HTTP listener
 ChessChallenge/API/
 ├── GroqAIHelper.cs            # AI explanation integration
 ├── MyBot.cs                   # Chess engine (minimax algorithm)
 ├── MyBotAnalyzer.cs           # Position analysis utilities
-├── EvalBreakdown.cs           # Evaluation component breakdown
+├── EvalBreakdown.cs           # Evaluation component details
 ├── EvalExporter.cs            # Analysis export functionality
 └── BitboardHelper.cs          # Chess bitboard operations
 ```
@@ -129,76 +127,73 @@ ChessChallenge/API/
 ## Technologies
 
 - **C# / .NET Framework**: Core application and WPF GUI
-- **Custom Chess Engine**: Minimax algorithm with alpha-beta pruning
-- **Groq API**: LLaMA 3.3 5.5B for fast responses (up to 1ms)
+- **Custom Chess Engine**: Minimax with alpha-beta pruning (configurable depth)
+- **Groq API**: LLaMA 3.3 70B for natural language explanations
 - **System.Net.HttpListener**: Local HTTP server for position input
-- **WinAPI Interop**: Global hotkeys and window management
-- **JSON Parsing**: Position data serialization/deserialization
+- **WPF**: Modern Windows desktop interface
+- **JSON**: Position data serialization
 
 ## Configuration
 
-### Options Menu Settings
-- **Opacity**: 0.1 to 1.0 (adjustable in 0.1 increments)
-- **Width**: 100px to 400px (adjustable in 10px increments)
-- **API Connection**: Enable/disable bot analysis
-- **AI Explanations**: Enable/disable Groq API calls
+### Settings Menu Options
+- **Window Opacity**: 0.1 to 1.0 (adjust transparency)
+- **Window Width**: 100px to 400px (resize interface)
+- **Engine Toggle**: Enable/disable move suggestions
+- **AI Explanations**: Enable/disable natural language analysis
 
-### Advanced Settings
-Edit source code to customize:
-- Bot search depth (default: 6 plies)
-- Blunder threshold (default: 1.0 pawn advantage)
-- Explanation length (default: 2-3 sentences)
-- Evaluation piece values
-- Port number (default: 30012)
+### Advanced Customization
+Edit source code to adjust:
+- Engine search depth (default: 6 plies for balanced speed/strength)
+- Piece evaluation values
+- Explanation detail level
+- Server port (default: 30012)
 
-## Example Output
+## Example Analysis Output
 
-**Normal Move:**
+**Opening Move:**
 ```
-Move: e2e4 | 150ms
-Advances the central pawn to control key squares and open lines 
-for the bishop and queen. This prepares for rapid piece development 
-while maintaining flexibility in the opening.
-```
+Suggested Move: e2-e4 | Analysis Time: 150ms | Evaluation: +0.2
 
-**Blunder Detection:**
-```
-BLUNDER! +2.3 | Move: d1h5 | 220ms | Captures Queen
-Opponent left their queen undefended on h5, allowing a free capture 
-worth 9 points of material. Follow up by consolidating the advantage 
-with Nc3 to develop while maintaining the extra queen.
+Opens lines for the bishop and queen while controlling the center. 
+This flexible pawn move allows for various opening systems and puts 
+immediate pressure on Black's position.
 ```
 
-## Screenshots
-
-Place your screenshots in the following locations:
-
+**Tactical Position:**
 ```
-docs/screenshots/
-├── gui-overlay.png          # Main screenshot (required)
-├── options-menu.png         # Options configuration panel
-├── blunder-alert.png        # Example of blunder detection
-├── normal-analysis.png      # Regular move explanation
-└── stealth-mode.png         # Overlay with click-through enabled
+Suggested Move: Qd1-h5 | Analysis Time: 220ms | Evaluation: +2.8
+
+This move attacks the undefended knight on f7 and threatens checkmate. 
+After the knight moves, White can capture on f7 with check, winning 
+material and disrupting Black's king safety.
 ```
 
 ## Contributing
 
-Contributions are welcome! Areas for improvement:
-- Integration with Stockfish or other UCI engines
-- Opening book database
-- Endgame tablebase support
-- Multi-language support for explanations
-- Custom evaluation function tuning
-- Performance optimization for deeper searches
+Contributions welcome! Ideas for enhancement:
+- Stockfish UCI engine integration for stronger analysis
+- Opening book database for theory study
+- Puzzle mode for tactical training
+- Multi-language support
+- Game database import/export
+- Performance optimizations
+
+## Roadmap
+
+- [ ] Integration with popular chess websites (chess.com, lichess.org)
+- [ ] Save/load analysis sessions
+- [ ] Variation explorer for opening study
+- [ ] Position search in game databases
+- [ ] Mobile companion app
+
+## License
+
+This project is open-source and available for educational purposes. Contributions and feedback are encouraged.
 
 ## Acknowledgments
 
-- Chess Challenge API for board representation
+- Chess Challenge API for board representation framework
 - Groq for AI inference infrastructure
-- Community contributors and testers
+- The chess programming community for algorithms and techniques
 
----
-
-The use of CHEATMATE is at your own risk. The tool is provided for educational and demonstration purposes only. 
-CHEATMATE assumes no liability for damages or violations that may arise from the use. There are no claims as to the function, security or integrity of the software.
+**Educational Tool Notice**: ChessMentor is designed for post-game analysis, position study, and chess education. This tool helps players understand chess principles and improve their game through detailed analysis and AI-powered explanations.
