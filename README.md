@@ -1,4 +1,4 @@
-# ChessMentor - AI-Powered Chess Training & Analysis Desktop App
+# Cheatmate - AI-Powered Chess Training & Analysis Desktop App
 
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/cyber-dev-skalovsi/SchachAnalyseGUI)  
 [![Language](https://img.shields.io/badge/language-C%23-blue)](https://docs.microsoft.com/en-us/dotnet/csharp/)
